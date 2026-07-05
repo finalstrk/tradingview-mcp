@@ -1,0 +1,138 @@
+//@version=6
+strategy("DT EMA Pullback v1", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     commission_type=strategy.commission.percent, commission_value=0.005,
+     slippage=2, process_orders_on_close=true, calc_on_every_tick=false)
+
+// Input groups
+string grpSession = "Session"
+string grpTrend = "Trend"
+string grpTrigger = "Trigger"
+
+// Session inputs
+sessionPreset = input.string("NY", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=grpSession)
+customSession = input.session("0930-1600", "Custom session", group=grpSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=grpSession)
+
+// Trend inputs
+emaFastLen = input.int(20, "EMA 20 length", minval=1, group=grpTrend)
+emaSlowLen = input.int(50, "EMA 50 length", minval=1, group=grpTrend)
+slopeLookback = input.int(5, "Slope lookback", minval=1, group=grpTrend)
+
+// Trigger inputs
+triggerWindow = input.int(3, "Trigger window (bars)", minval=1, group=grpTrigger)
+maxDistanceAtr = input.float(1.0, "Max distance from EMA (ATR)", minval=0.0, step=0.1, group=grpTrigger)
+maxSignalsPerDay = input.int(2, "Max signals per day", minval=1, group=grpTrigger)
+
+// Session resolution
+[sessStr, tzStr] = switch sessionPreset
+    "Tokyo" => ["0900-1500", "Asia/Tokyo"]
+    "London" => ["0800-1630", "Europe/London"]
+    "NY" => ["0930-1600", "America/New_York"]
+    "RTH" => ["0930-1600", "America/New_York"]
+    => [customSession, customTimezone]
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+sessionExit = inSession[1] and not inSession
+newDay = timeframe.change("D")
+
+// Core series
+ema20 = ta.ema(close, emaFastLen)
+ema50 = ta.ema(close, emaSlowLen)
+atr14 = ta.atr(14)
+riskLow = ta.lowest(low, 5)
+riskHigh = ta.highest(high, 5)
+
+// Regime and pullback detection
+regimeUp = ema20 > ema50 and ema50 > ema50[slopeLookback]
+regimeDown = ema20 < ema50 and ema50 < ema50[slopeLookback]
+pullbackL = low <= ema20 and close > ema20
+pullbackS = high >= ema20 and close < ema20
+
+// Signal state
+var int signalsToday = 0
+var int pendingDir = 0
+var int pendingBar = na
+var float activeSL = na
+var float activeTP = na
+
+if newDay
+    signalsToday := 0
+    pendingDir := 0
+    pendingBar := na
+
+// Risk helpers
+longTP2(entryPrice, slPrice) =>
+    entryPrice + (entryPrice - slPrice) * 2.0
+
+shortTP2(entryPrice, slPrice) =>
+    entryPrice - (slPrice - entryPrice) * 2.0
+
+int barsSinceSetup = pendingDir == 0 or na(pendingBar) ? na : bar_index - pendingBar
+withinTriggerWindow = not na(barsSinceSetup) and barsSinceSetup > 0 and barsSinceSetup <= triggerWindow
+canSignal = inSession and signalsToday < maxSignalsPerDay
+
+longSignal = canSignal and pendingDir == 1 and withinTriggerWindow and close > high[1] and close < ema20 + atr14 * maxDistanceAtr
+shortSignal = canSignal and pendingDir == -1 and withinTriggerWindow and close < low[1] and close > ema20 - atr14 * maxDistanceAtr
+expiredSetup = pendingDir != 0 and not na(barsSinceSetup) and barsSinceSetup > triggerWindow
+
+// End-of-day and session safety
+if sessionExit
+    strategy.close_all("EOD")
+    pendingDir := 0
+    pendingBar := na
+
+// Entries and exits
+if longSignal and strategy.position_size <= 0
+    entryPrice = close
+    slPrice = riskLow - atr14 * 0.25
+    tpPrice = longTP2(entryPrice, slPrice)
+    activeSL := slPrice
+    activeTP := tpPrice
+    signalsToday += 1
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long TP/SL", "Long", stop=activeSL, limit=activeTP)
+    pendingDir := 0
+    pendingBar := na
+else if shortSignal and strategy.position_size >= 0
+    entryPrice = close
+    slPrice = riskHigh + atr14 * 0.25
+    tpPrice = shortTP2(entryPrice, slPrice)
+    activeSL := slPrice
+    activeTP := tpPrice
+    signalsToday += 1
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short TP/SL", "Short", stop=activeSL, limit=activeTP)
+    pendingDir := 0
+    pendingBar := na
+else if expiredSetup
+    pendingDir := 0
+    pendingBar := na
+else if canSignal and strategy.position_size == 0 and regimeUp and pullbackL
+    pendingDir := 1
+    pendingBar := bar_index
+else if canSignal and strategy.position_size == 0 and regimeDown and pullbackS
+    pendingDir := -1
+    pendingBar := bar_index
+
+if strategy.position_size > 0 and not na(activeSL) and not na(activeTP)
+    strategy.exit("Long TP/SL", "Long", stop=activeSL, limit=activeTP)
+
+if strategy.position_size < 0 and not na(activeSL) and not na(activeTP)
+    strategy.exit("Short TP/SL", "Short", stop=activeSL, limit=activeTP)
+
+if strategy.position_size > 0 and close < ema20
+    strategy.close("Long", "EMA exit")
+
+if strategy.position_size < 0 and close > ema20
+    strategy.close("Short", "EMA exit")
+
+if strategy.position_size == 0 and not longSignal and not shortSignal
+    activeSL := na
+    activeTP := na
+
+// Visuals
+plot(ema20, "EMA 20", color=color.new(color.teal, 0), linewidth=2)
+plot(ema50, "EMA 50", color=color.new(color.orange, 0), linewidth=2)
+plotshape(longSignal, title="DT EMA Pullback Long Trigger", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="L")
+plotshape(shortSignal, title="DT EMA Pullback Short Trigger", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")

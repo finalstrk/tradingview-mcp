@@ -1,0 +1,322 @@
+{
+  "version": 1,
+  "updated": "2026-07-05",
+  "setups": [
+    {
+      "id": "orb",
+      "name": "Opening Range Breakout",
+      "pine_indicator": "pine/setups/orb/orb_indicator.pine",
+      "pine_strategy": "pine/setups/orb/orb_strategy.pine",
+      "tv_script_name": "DT ORB v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "rejected",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [
+            "journal/backtests/orb__FX_USDJPY__5__20260705.json",
+            "journal/backtests/orb__FX_USDJPY__15__20260705.json",
+            "journal/backtests/orb__FX_EURUSD__5__20260705.json",
+            "journal/backtests/orb__FX_EURUSD__15__20260705.json",
+            "journal/backtests/orb__FX_GBPUSD__5__20260705.json",
+            "journal/backtests/orb__FX_GBPUSD__15__20260705.json",
+            "journal/backtests/orb__FX_AUDUSD__5__20260705.json",
+            "journal/backtests/orb__FX_AUDUSD__15__20260705.json"
+          ],
+          "bt_winrate": 0.492374,
+          "bt_pf": 0.850331,
+          "updated": "2026-07-05",
+          "notes": "London session with OR window 0800-0830. 5m runs were n<100; all sufficient 15m runs failed PF threshold, so market status is rejected."
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        }
+      },
+      "risk_model": {
+        "sl": "or_opposite",
+        "tp1": "1R",
+        "tp2": "2R"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    },
+    {
+      "id": "vwap_reversion",
+      "name": "VWAP Reversion",
+      "pine_indicator": "pine/setups/vwap_reversion/vwap_reversion_indicator.pine",
+      "pine_strategy": "pine/setups/vwap_reversion/vwap_reversion_strategy.pine",
+      "tv_script_name": "DT VWAP Reversion v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        }
+      },
+      "risk_model": {
+        "sl": "signal_low_minus_0.5atr",
+        "tp1": "vwap",
+        "tp2": "opposite_1sigma"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    },
+    {
+      "id": "pdh_pdl_break",
+      "name": "PDH PDL Break",
+      "pine_indicator": "pine/setups/pdh_pdl_break/pdh_pdl_break_indicator.pine",
+      "pine_strategy": "pine/setups/pdh_pdl_break/pdh_pdl_break_strategy.pine",
+      "tv_script_name": "DT PDH PDL Break v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        }
+      },
+      "risk_model": {
+        "sl": "retest_low_minus_0.25atr",
+        "tp1": "1.5R",
+        "tp2": "pdh_plus_half_range"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    },
+    {
+      "id": "ema_pullback",
+      "name": "EMA Pullback",
+      "pine_indicator": "pine/setups/ema_pullback/ema_pullback_indicator.pine",
+      "pine_strategy": "pine/setups/ema_pullback/ema_pullback_strategy.pine",
+      "tv_script_name": "DT EMA Pullback v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        }
+      },
+      "risk_model": {
+        "sl": "lowest5_minus_0.25atr",
+        "tp1": "1R",
+        "tp2": "2R"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    },
+    {
+      "id": "nr_squeeze",
+      "name": "NR Squeeze",
+      "pine_indicator": "pine/setups/nr_squeeze/nr_squeeze_indicator.pine",
+      "pine_strategy": "pine/setups/nr_squeeze/nr_squeeze_strategy.pine",
+      "tv_script_name": "DT NR Squeeze v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        }
+      },
+      "risk_model": {
+        "sl": "mother_opposite",
+        "tp1": "1.5R",
+        "tp2": "2.5R"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    }
+  ]
+}

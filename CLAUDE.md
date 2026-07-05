@@ -33,6 +33,21 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 6. `data_get_ohlcv` with `summary: true` → price action summary
 7. `capture_screenshot` → visual confirmation
 
+### "Should I take this trade?" (trade decision support)
+1. Check `journal/registry.json` first — only setup x market entries with `status: "adopted"` are eligible for live trade judgement
+2. Use `/trade-judge <symbol>` when a DT Pine indicator shows a forming or triggered setup
+3. Read DT Pine labels via `data_get_pine_labels` with `study_filter: "DT "` and parse `DT|<setup_id>|<dir>|<state>|entry=...|sl=...|tp1=...|tp2=...`
+4. Confirm MTF context, key levels, active session, RR, and recent track record before returning `GO`, `WAIT`, or `NO-GO`
+5. Record each judgement as one JSONL line in `journal/judgements/YYYY-MM.jsonl`
+6. If the trade is taken, link the later trade record with `judgement_id` in `journal/trades/YYYY-MM.jsonl`
+7. Do not treat non-adopted setups as live signals; route them to `/setup-verify` or replay practice
+
+### "Log my trade" / "Practice setups"
+- Use `/trade-log` after live or replay exits to append one execution record to `journal/trades/YYYY-MM.jsonl`
+- Preserve `setup`, `market`, `symbol`, `direction`, actual entry/exit, `r_multiple`, `followed_plan`, mistakes, and notes
+- Use `/replay-drill <setup> <symbol> <timeframe> <date>` to practice adopted or candidate setups in TradingView replay mode
+- Replay trades should use `mode: "replay"` so stats can separate practice from live execution
+
 ### "Change the chart"
 - `chart_set_symbol` → switch ticker (e.g., "AAPL", "ES1!", "NYMEX:CL1!")
 - `chart_set_timeframe` → switch resolution (e.g., "1", "5", "15", "60", "D", "W")
@@ -125,5 +140,10 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 ```
 Claude Code ←→ MCP Server (stdio) ←→ CDP (localhost:9222) ←→ TradingView Desktop (Electron)
 ```
+
+DT trading system paths:
+- `pine/setups/` contains the DT setup library: `orb`, `vwap_reversion`, `pdh_pdl_break`, `ema_pullback`, and `nr_squeeze`
+- `journal/` is the evidence layer: registry status, backtest summaries, judgement JSONL, trade JSONL, and generated setup stats
+- Live trade decisions are gated by `journal/registry.json`; only `adopted` setup x market combinations should feed `/trade-judge`
 
 Pine graphics path: `study._graphics._primitivesCollection.dwglines.get('lines').get(false)._primitivesDataById`

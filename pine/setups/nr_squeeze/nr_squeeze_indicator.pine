@@ -1,0 +1,188 @@
+//@version=6
+indicator("DT NR Squeeze v1", overlay=true, max_labels_count=50, max_lines_count=50)
+
+// Input groups
+string groupSession = "Session"
+string groupSetup = "Setup"
+
+sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+nrLookback = input.int(7, "NR lookback", minval=2, group=groupSetup)
+breakoutWindow = input.int(3, "Breakout window (bars)", minval=1, group=groupSetup)
+maxSignalsPerDay = input.int(2, "Max signals per day", minval=1, group=groupSetup)
+
+// Session resolution
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+
+// Global series calculations
+barRange = high - low
+lowestRange = ta.lowest(barRange, nrLookback)
+fastEma = ta.ema(close, 20)
+slowEma = ta.ema(close, 50)
+newDay = timeframe.change("D")
+
+// Compression detection
+insideBar = high < high[1] and low > low[1]
+nrBar = barRange == lowestRange
+squeezeNow = inSession and not na(high[1]) and (insideBar or nrBar)
+squeezeHigh = insideBar ? high[1] : high
+squeezeLow = insideBar ? low[1] : low
+
+// Persistent setup state
+var float motherHigh = na
+var float motherLow = na
+var int squeezeBarIndex = na
+var bool waitingBreakout = false
+var int signalsToday = 0
+var label sigLabel = na
+var line motherHighLine = na
+var line motherLowLine = na
+var string lastDir = "long"
+
+if newDay
+    signalsToday := 0
+    waitingBreakout := false
+    motherHigh := na
+    motherLow := na
+    squeezeBarIndex := na
+
+int barsSinceSqueeze = waitingBreakout and not na(squeezeBarIndex) ? bar_index - squeezeBarIndex : na
+canSignal = inSession and signalsToday < maxSignalsPerDay
+longBreakout = waitingBreakout and canSignal and barsSinceSqueeze >= 1 and barsSinceSqueeze <= breakoutWindow and close > motherHigh and fastEma > slowEma
+shortBreakout = waitingBreakout and canSignal and barsSinceSqueeze >= 1 and barsSinceSqueeze <= breakoutWindow and close < motherLow and fastEma < slowEma
+windowExpired = waitingBreakout and not na(barsSinceSqueeze) and barsSinceSqueeze > breakoutWindow
+
+// Signal price helpers
+rangeSize = motherHigh - motherLow
+longEntry = motherHigh
+longStop = motherLow
+longTp1 = longEntry + rangeSize * 1.5
+longTp2 = longEntry + rangeSize * 2.5
+shortEntry = motherLow
+shortStop = motherHigh
+shortTp1 = shortEntry - rangeSize * 1.5
+shortTp2 = shortEntry - rangeSize * 2.5
+
+longSignal = false
+shortSignal = false
+showSignalLabel = false
+string labelDir = lastDir
+string labelState = "forming"
+float labelEntry = na
+float labelStop = na
+float labelTp1 = na
+float labelTp2 = na
+float labelY = close
+color labelColor = color.gray
+labelStyle = label.style_label_left
+
+// Trigger, expire, or refresh the pending setup state.
+if longBreakout
+    longSignal := true
+    signalsToday := signalsToday + 1
+    waitingBreakout := false
+    lastDir := "long"
+    labelDir := "long"
+    labelState := "triggered"
+    labelEntry := close
+    labelStop := longStop
+    labelTp1 := close + rangeSize * 1.5
+    labelTp2 := close + rangeSize * 2.5
+    labelY := low
+    labelColor := color.new(color.green, 0)
+    labelStyle := label.style_label_up
+    showSignalLabel := true
+else if shortBreakout
+    shortSignal := true
+    signalsToday := signalsToday + 1
+    waitingBreakout := false
+    lastDir := "short"
+    labelDir := "short"
+    labelState := "triggered"
+    labelEntry := close
+    labelStop := shortStop
+    labelTp1 := close - rangeSize * 1.5
+    labelTp2 := close - rangeSize * 2.5
+    labelY := high
+    labelColor := color.new(color.red, 0)
+    labelStyle := label.style_label_down
+    showSignalLabel := true
+else if windowExpired
+    waitingBreakout := false
+    labelDir := lastDir
+    labelState := "expired"
+    labelEntry := lastDir == "long" ? longEntry : shortEntry
+    labelStop := lastDir == "long" ? longStop : shortStop
+    labelTp1 := lastDir == "long" ? longTp1 : shortTp1
+    labelTp2 := lastDir == "long" ? longTp2 : shortTp2
+    labelY := close
+    labelColor := color.new(color.gray, 0)
+    labelStyle := label.style_label_left
+    showSignalLabel := true
+
+if squeezeNow and canSignal and not longSignal and not shortSignal
+    motherHigh := squeezeHigh
+    motherLow := squeezeLow
+    squeezeBarIndex := bar_index
+    waitingBreakout := true
+    lastDir := fastEma >= slowEma ? "long" : "short"
+    labelDir := lastDir
+    labelState := "forming"
+    labelEntry := lastDir == "long" ? motherHigh : motherLow
+    labelStop := lastDir == "long" ? motherLow : motherHigh
+    labelTp1 := lastDir == "long" ? motherHigh + (motherHigh - motherLow) * 1.5 : motherLow - (motherHigh - motherLow) * 1.5
+    labelTp2 := lastDir == "long" ? motherHigh + (motherHigh - motherLow) * 2.5 : motherLow - (motherHigh - motherLow) * 2.5
+    labelY := close
+    labelColor := color.new(color.blue, 0)
+    labelStyle := label.style_label_left
+    showSignalLabel := true
+    if not na(motherHighLine)
+        line.delete(motherHighLine)
+    if not na(motherLowLine)
+        line.delete(motherLowLine)
+    motherHighLine := line.new(bar_index, motherHigh, bar_index + breakoutWindow, motherHigh, xloc=xloc.bar_index, color=color.new(color.green, 0), width=2)
+    motherLowLine := line.new(bar_index, motherLow, bar_index + breakoutWindow, motherLow, xloc=xloc.bar_index, color=color.new(color.red, 0), width=2)
+else if waitingBreakout and not longSignal and not shortSignal
+    lastDir := fastEma >= slowEma ? "long" : "short"
+    labelDir := lastDir
+    labelState := "forming"
+    labelEntry := lastDir == "long" ? longEntry : shortEntry
+    labelStop := lastDir == "long" ? longStop : shortStop
+    labelTp1 := lastDir == "long" ? longTp1 : shortTp1
+    labelTp2 := lastDir == "long" ? longTp2 : shortTp2
+    labelY := close
+    labelColor := color.new(color.blue, 0)
+    labelStyle := label.style_label_left
+    showSignalLabel := true
+
+// MCP label output
+signalText = "DT|nr_squeeze|" + labelDir + "|" + labelState + "|entry=" + str.tostring(labelEntry, format.mintick) + "|sl=" + str.tostring(labelStop, format.mintick) + "|tp1=" + str.tostring(labelTp1, format.mintick) + "|tp2=" + str.tostring(labelTp2, format.mintick)
+
+if showSignalLabel
+    label.delete(sigLabel)
+    sigLabel := label.new(bar_index, labelY, signalText, style=labelStyle, textcolor=color.white, color=labelColor)
+
+// Visuals and alerts
+plot(fastEma, "EMA 20", color=color.new(color.teal, 0))
+plot(slowEma, "EMA 50", color=color.new(color.orange, 0))
+plotshape(squeezeNow, title="NR squeeze forming", style=shape.circle, location=location.abovebar, color=color.new(color.blue, 0), size=size.tiny, text="SQZ")
+plotshape(longSignal, title="DT NR Squeeze long", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="DT L")
+plotshape(shortSignal, title="DT NR Squeeze short", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="DT S")
+
+alertcondition(longSignal, "DT NR Squeeze Long", "DT NR Squeeze long signal triggered")
+alertcondition(shortSignal, "DT NR Squeeze Short", "DT NR Squeeze short signal triggered")

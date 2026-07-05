@@ -1,0 +1,194 @@
+//@version=6
+indicator("DT EMA Pullback v1", overlay=true, max_labels_count=50)
+
+// Input groups
+string grpSession = "Session"
+string grpTrend = "Trend"
+string grpTrigger = "Trigger"
+
+// Session inputs
+sessionPreset = input.string("NY", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=grpSession)
+customSession = input.session("0930-1600", "Custom session", group=grpSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=grpSession)
+
+// Trend inputs
+emaFastLen = input.int(20, "EMA 20 length", minval=1, group=grpTrend)
+emaSlowLen = input.int(50, "EMA 50 length", minval=1, group=grpTrend)
+slopeLookback = input.int(5, "Slope lookback", minval=1, group=grpTrend)
+
+// Trigger inputs
+triggerWindow = input.int(3, "Trigger window (bars)", minval=1, group=grpTrigger)
+maxDistanceAtr = input.float(1.0, "Max distance from EMA (ATR)", minval=0.0, step=0.1, group=grpTrigger)
+maxSignalsPerDay = input.int(2, "Max signals per day", minval=1, group=grpTrigger)
+
+// Session resolution
+[sessStr, tzStr] = switch sessionPreset
+    "Tokyo" => ["0900-1500", "Asia/Tokyo"]
+    "London" => ["0800-1630", "Europe/London"]
+    "NY" => ["0930-1600", "America/New_York"]
+    "RTH" => ["0930-1600", "America/New_York"]
+    => [customSession, customTimezone]
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+newDay = timeframe.change("D")
+
+// Core series
+ema20 = ta.ema(close, emaFastLen)
+ema50 = ta.ema(close, emaSlowLen)
+atr14 = ta.atr(14)
+riskLow = ta.lowest(low, 5)
+riskHigh = ta.highest(high, 5)
+
+// Regime and pullback detection
+regimeUp = ema20 > ema50 and ema50 > ema50[slopeLookback]
+regimeDown = ema20 < ema50 and ema50 < ema50[slopeLookback]
+pullbackL = low <= ema20 and close > ema20
+pullbackS = high >= ema20 and close < ema20
+
+// Signal state
+var int signalsToday = 0
+var int pendingDir = 0
+var int pendingBar = na
+var float pendingEntry = na
+var float pendingSL = na
+var float pendingTP1 = na
+var float pendingTP2 = na
+var label sigLabel = na
+
+if newDay
+    signalsToday := 0
+    pendingDir := 0
+    pendingBar := na
+    pendingEntry := na
+    pendingSL := na
+    pendingTP1 := na
+    pendingTP2 := na
+
+// Helpers
+sigText(dirText, stateText, entryPrice, slPrice, tp1Price, tp2Price) =>
+    "DT|ema_pullback|" + dirText + "|" + stateText + "|entry=" + str.tostring(entryPrice, format.mintick) + "|sl=" + str.tostring(slPrice, format.mintick) + "|tp1=" + str.tostring(tp1Price, format.mintick) + "|tp2=" + str.tostring(tp2Price, format.mintick)
+
+longTP1(entryPrice, slPrice) =>
+    entryPrice + (entryPrice - slPrice)
+
+longTP2(entryPrice, slPrice) =>
+    entryPrice + (entryPrice - slPrice) * 2.0
+
+shortTP1(entryPrice, slPrice) =>
+    entryPrice - (slPrice - entryPrice)
+
+shortTP2(entryPrice, slPrice) =>
+    entryPrice - (slPrice - entryPrice) * 2.0
+
+int barsSinceSetup = pendingDir == 0 or na(pendingBar) ? na : bar_index - pendingBar
+withinTriggerWindow = not na(barsSinceSetup) and barsSinceSetup > 0 and barsSinceSetup <= triggerWindow
+canSignal = inSession and signalsToday < maxSignalsPerDay
+
+longSignal = canSignal and pendingDir == 1 and withinTriggerWindow and close > high[1] and close < ema20 + atr14 * maxDistanceAtr
+shortSignal = canSignal and pendingDir == -1 and withinTriggerWindow and close < low[1] and close > ema20 - atr14 * maxDistanceAtr
+expiredLong = pendingDir == 1 and not na(barsSinceSetup) and barsSinceSetup > triggerWindow
+expiredShort = pendingDir == -1 and not na(barsSinceSetup) and barsSinceSetup > triggerWindow
+
+bool formingLong = false
+bool formingShort = false
+
+// State transitions and latest label
+if longSignal
+    entryPrice = close
+    slPrice = riskLow - atr14 * 0.25
+    tp1Price = longTP1(entryPrice, slPrice)
+    tp2Price = longTP2(entryPrice, slPrice)
+    signalsToday += 1
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, low, sigText("long", "triggered", entryPrice, slPrice, tp1Price, tp2Price), style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white)
+    pendingDir := 0
+    pendingBar := na
+    pendingEntry := na
+    pendingSL := na
+    pendingTP1 := na
+    pendingTP2 := na
+else if shortSignal
+    entryPrice = close
+    slPrice = riskHigh + atr14 * 0.25
+    tp1Price = shortTP1(entryPrice, slPrice)
+    tp2Price = shortTP2(entryPrice, slPrice)
+    signalsToday += 1
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, high, sigText("short", "triggered", entryPrice, slPrice, tp1Price, tp2Price), style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
+    pendingDir := 0
+    pendingBar := na
+    pendingEntry := na
+    pendingSL := na
+    pendingTP1 := na
+    pendingTP2 := na
+else if expiredLong
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, low, sigText("long", "expired", pendingEntry, pendingSL, pendingTP1, pendingTP2), style=label.style_label_up, color=color.new(color.gray, 0), textcolor=color.white)
+    pendingDir := 0
+    pendingBar := na
+    pendingEntry := na
+    pendingSL := na
+    pendingTP1 := na
+    pendingTP2 := na
+else if expiredShort
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, high, sigText("short", "expired", pendingEntry, pendingSL, pendingTP1, pendingTP2), style=label.style_label_down, color=color.new(color.gray, 0), textcolor=color.white)
+    pendingDir := 0
+    pendingBar := na
+    pendingEntry := na
+    pendingSL := na
+    pendingTP1 := na
+    pendingTP2 := na
+else if canSignal and regimeUp and pullbackL
+    entryPrice = high
+    slPrice = riskLow - atr14 * 0.25
+    tp1Price = longTP1(entryPrice, slPrice)
+    tp2Price = longTP2(entryPrice, slPrice)
+    formingLong := true
+    pendingDir := 1
+    pendingBar := bar_index
+    pendingEntry := entryPrice
+    pendingSL := slPrice
+    pendingTP1 := tp1Price
+    pendingTP2 := tp2Price
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, low, sigText("long", "forming", entryPrice, slPrice, tp1Price, tp2Price), style=label.style_label_up, color=color.new(color.teal, 0), textcolor=color.white)
+else if canSignal and regimeDown and pullbackS
+    entryPrice = low
+    slPrice = riskHigh + atr14 * 0.25
+    tp1Price = shortTP1(entryPrice, slPrice)
+    tp2Price = shortTP2(entryPrice, slPrice)
+    formingShort := true
+    pendingDir := -1
+    pendingBar := bar_index
+    pendingEntry := entryPrice
+    pendingSL := slPrice
+    pendingTP1 := tp1Price
+    pendingTP2 := tp2Price
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, high, sigText("short", "forming", entryPrice, slPrice, tp1Price, tp2Price), style=label.style_label_down, color=color.new(color.orange, 0), textcolor=color.white)
+
+// Plots
+plot(ema20, "EMA 20", color=color.new(color.teal, 0), linewidth=2)
+plot(ema50, "EMA 50", color=color.new(color.orange, 0), linewidth=2)
+plot(pendingDir != 0 ? pendingEntry : na, "Pending Entry", color=color.new(color.gray, 35), style=plot.style_linebr)
+plot(pendingDir != 0 ? pendingSL : na, "Pending SL", color=color.new(color.red, 35), style=plot.style_linebr)
+plot(pendingDir != 0 ? pendingTP2 : na, "Pending TP2", color=color.new(color.green, 35), style=plot.style_linebr)
+
+// Signal history
+plotshape(formingLong, title="DT EMA Pullback Long Forming", style=shape.circle, location=location.belowbar, color=color.new(color.teal, 0), size=size.tiny, text="L?")
+plotshape(formingShort, title="DT EMA Pullback Short Forming", style=shape.circle, location=location.abovebar, color=color.new(color.orange, 0), size=size.tiny, text="S?")
+plotshape(longSignal, title="DT EMA Pullback Long Trigger", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="L")
+plotshape(shortSignal, title="DT EMA Pullback Short Trigger", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")
+plotshape(expiredLong, title="DT EMA Pullback Long Expired", style=shape.xcross, location=location.belowbar, color=color.new(color.gray, 0), size=size.tiny, text="X")
+plotshape(expiredShort, title="DT EMA Pullback Short Expired", style=shape.xcross, location=location.abovebar, color=color.new(color.gray, 0), size=size.tiny, text="X")
+
+// Alerts
+alertcondition(longSignal, "DT EMA Pullback Long", "DT EMA Pullback long signal triggered")
+alertcondition(shortSignal, "DT EMA Pullback Short", "DT EMA Pullback short signal triggered")

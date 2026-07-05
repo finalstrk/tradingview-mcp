@@ -1,0 +1,28 @@
+{
+  "setup": "orb",
+  "symbol": "FX:EURUSD",
+  "market": "fx",
+  "tf": "15",
+  "date": "2026-07-05",
+  "period": {
+    "from": "2025-09-01T08:45:00.000Z",
+    "to": "2026-07-03T20:45:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "London",
+    "orWindow": "0800-0830",
+    "maxOrWidthAtr": 2.5,
+    "signalValidityBars": 24
+  },
+  "trades": 459,
+  "winrate": 0.501089,
+  "winrate_pct": 50.11,
+  "pf": 0.864236,
+  "max_dd_pct": 0.31,
+  "net_profit_pct": -0.16,
+  "avg_trade": -3.535369,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "failed:wr/pf",
+  "notes": "TradingView strategy report via CDP; repo DT ORB v1 strategy saved as Pine version 15.0 before run."
+}

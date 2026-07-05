@@ -1,0 +1,146 @@
+//@version=6
+indicator("DT VWAP Reversion v1", overlay=true, max_labels_count=50)
+
+// Input groups
+groupSession = "Session"
+groupSignal = "Signal"
+groupDisplay = "Display"
+
+// Session inputs
+sessionPreset = input.string("NY", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+
+// Signal inputs
+rsiLength = input.int(14, "RSI length", minval=1, group=groupSignal)
+rsiOversold = input.float(35.0, "RSI oversold", minval=0.0, maxval=100.0, step=0.5, group=groupSignal)
+rsiOverbought = input.float(65.0, "RSI overbought", minval=0.0, maxval=100.0, step=0.5, group=groupSignal)
+trendDayThreshold = input.float(1.5, "Trend day threshold", minval=0.0, step=0.1, group=groupSignal)
+maxSignalsPerDay = input.int(2, "Max signals per day", minval=0, group=groupSignal)
+
+// Display inputs
+showSignals = input.bool(true, "Show signal markers", group=groupDisplay)
+showBands = input.bool(true, "Show VWAP bands", group=groupDisplay)
+
+// Session resolution
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+newDay = timeframe.change("D")
+
+// Global calculations
+dailyAnchor = timeframe.change("D")
+[vwapVal, upper2, lower2] = ta.vwap(hlc3, dailyAnchor, 2.0)
+[vwapOne, upper1, lower1] = ta.vwap(hlc3, dailyAnchor, 1.0)
+rsiVal = ta.rsi(close, rsiLength)
+emaFast = ta.ema(close, 20)
+emaSlow = ta.ema(close, 50)
+atrVal = ta.atr(14)
+trendScore = atrVal > 0.0 ? math.abs(emaFast - emaSlow) / atrVal : 0.0
+strongTrend = trendScore > trendDayThreshold
+
+// Daily state
+var int signalCountToday = 0
+var bool longForming = false
+var bool shortForming = false
+var label sigLabel = na
+
+if newDay
+    signalCountToday := 0
+    longForming := false
+    shortForming := false
+
+// Setup states
+hasSignalSlot = signalCountToday < maxSignalsPerDay
+canEvaluate = inSession and hasSignalSlot
+longOutside = canEvaluate and low < lower2
+shortOutside = canEvaluate and high > upper2
+longFormingEvent = longOutside and close <= lower2 and not strongTrend and not longForming
+shortFormingEvent = shortOutside and close >= upper2 and not strongTrend and not shortForming
+longExpired = longForming and strongTrend
+shortExpired = shortForming and strongTrend
+longSignal = canEvaluate and not strongTrend and low < lower2 and close > lower2 and rsiVal < rsiOversold
+shortSignal = canEvaluate and not strongTrend and high > upper2 and close < upper2 and rsiVal > rsiOverbought
+
+if longFormingEvent
+    longForming := true
+    shortForming := false
+
+if shortFormingEvent
+    shortForming := true
+    longForming := false
+
+if longExpired
+    longForming := false
+
+if shortExpired
+    shortForming := false
+
+if longSignal
+    signalCountToday := signalCountToday + 1
+    longForming := false
+    shortForming := false
+
+if shortSignal
+    signalCountToday := signalCountToday + 1
+    shortForming := false
+    longForming := false
+
+if not inSession
+    longForming := false
+    shortForming := false
+
+// Risk levels
+longEntry = close
+longSl = low - atrVal * 0.5
+longTp1 = vwapVal
+longTp2 = upper1
+shortEntry = close
+shortSl = high + atrVal * 0.5
+shortTp1 = vwapVal
+shortTp2 = lower1
+
+// Latest MCP label
+labelEvent = longFormingEvent or shortFormingEvent or longExpired or shortExpired or longSignal or shortSignal
+labelDir = (longFormingEvent or longExpired or longSignal) ? "long" : "short"
+labelState = (longSignal or shortSignal) ? "triggered" : (longExpired or shortExpired) ? "expired" : "forming"
+labelEntry = labelDir == "long" ? longEntry : shortEntry
+labelSl = labelDir == "long" ? longSl : shortSl
+labelTp1 = labelDir == "long" ? longTp1 : shortTp1
+labelTp2 = labelDir == "long" ? longTp2 : shortTp2
+labelY = labelDir == "long" ? low : high
+labelText = "DT|vwap_reversion|" + labelDir + "|" + labelState + "|entry=" + str.tostring(labelEntry, format.mintick) + "|sl=" + str.tostring(labelSl, format.mintick) + "|tp1=" + str.tostring(labelTp1, format.mintick) + "|tp2=" + str.tostring(labelTp2, format.mintick)
+
+if labelEvent
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, labelY, labelText,
+         style=labelDir == "long" ? label.style_label_up : label.style_label_down,
+         color=labelState == "expired" ? color.gray : labelDir == "long" ? color.new(color.green, 0) : color.new(color.red, 0),
+         textcolor=color.white, size=size.small)
+
+// Plots
+plot(showBands ? vwapVal : na, "VWAP", color=color.new(color.yellow, 0), linewidth=2)
+plot(showBands ? upper1 : na, "+1σ", color=color.new(color.teal, 0))
+plot(showBands ? lower1 : na, "-1σ", color=color.new(color.teal, 0))
+plot(showBands ? upper2 : na, "+2σ", color=color.new(color.orange, 0))
+plot(showBands ? lower2 : na, "-2σ", color=color.new(color.orange, 0))
+
+plotshape(showSignals and longSignal, title="Long signal", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="L")
+plotshape(showSignals and shortSignal, title="Short signal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")
+
+// Alerts
+alertcondition(longSignal, "DT VWAP Reversion Long", "DT VWAP Reversion long signal")
+alertcondition(shortSignal, "DT VWAP Reversion Short", "DT VWAP Reversion short signal")

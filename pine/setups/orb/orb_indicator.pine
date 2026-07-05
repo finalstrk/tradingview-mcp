@@ -1,0 +1,133 @@
+//@version=6
+indicator("DT ORB v1", overlay=true, max_labels_count=50)
+
+// Inputs
+sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group="Session")
+customSession = input.session("0930-1600", "Custom session", group="Session")
+customTimezone = input.string("America/New_York", "Custom timezone", group="Session")
+orWindow = input.session("0930-1000", "OR window", group="Session")
+maxOrWidthAtr = input.float(2.5, "Max OR width (ATR mult)", minval=0.1, step=0.1, group="Filters")
+signalValidityBars = input.int(24, "Signal validity (bars)", minval=1, group="Filters")
+
+// Session preset resolution
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+inOrWindow = not na(time(timeframe.period, orWindow, tzStr))
+isNewDay = timeframe.change("D")
+
+// Opening range state
+var float orHigh = na
+var float orLow = na
+var bool orLocked = false
+var int orLockBar = na
+var bool tradedToday = false
+var string lastDir = "long"
+var float lastEntry = na
+var float lastStop = na
+var float lastTp1 = na
+var float lastTp2 = na
+var label sigLabel = na
+
+if isNewDay
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := na
+    orHigh := na
+    orLow := na
+    orLocked := false
+    orLockBar := na
+    tradedToday := false
+    lastDir := "long"
+    lastEntry := na
+    lastStop := na
+    lastTp1 := na
+    lastTp2 := na
+
+if inOrWindow
+    orHigh := na(orHigh) ? high : math.max(orHigh, high)
+    orLow := na(orLow) ? low : math.min(orLow, low)
+    orLocked := false
+    orLockBar := na
+
+if inOrWindow[1] and not inOrWindow and not na(orHigh) and not na(orLow)
+    orLocked := true
+    orLockBar := bar_index
+
+// Signal filters and triggers
+atrValue = ta.atr(14)
+longCross = ta.crossover(close, orHigh)
+shortCross = ta.crossunder(close, orLow)
+hasRange = not na(orHigh) and not na(orLow) and orHigh > orLow
+orWidth = hasRange ? orHigh - orLow : na
+barsSinceLock = orLocked and not na(orLockBar) ? bar_index - orLockBar : na
+widthOk = orLocked and hasRange and orWidth < atrValue * maxOrWidthAtr
+validityOk = orLocked and not na(barsSinceLock) and barsSinceLock <= signalValidityBars
+longSignal = inSession and widthOk and validityOk and not tradedToday and longCross
+shortSignal = inSession and widthOk and validityOk and not tradedToday and shortCross
+
+if longSignal
+    lastDir := "long"
+    lastEntry := close
+    lastStop := orLow
+    lastTp1 := close + orWidth
+    lastTp2 := close + orWidth * 2.0
+    tradedToday := true
+
+if shortSignal
+    lastDir := "short"
+    lastEntry := close
+    lastStop := orHigh
+    lastTp1 := close - orWidth
+    lastTp2 := close - orWidth * 2.0
+    tradedToday := true
+
+// Label state and risk projection
+orExpired = orLocked and not tradedToday and not validityOk
+sigState = tradedToday ? "triggered" : orExpired ? "expired" : "forming"
+orMid = hasRange ? (orHigh + orLow) / 2.0 : na
+candidateDir = hasRange and close < orMid ? "short" : "long"
+candidateEntry = candidateDir == "long" ? orHigh : orLow
+candidateStop = candidateDir == "long" ? orLow : orHigh
+candidateTp1 = candidateDir == "long" ? candidateEntry + orWidth : candidateEntry - orWidth
+candidateTp2 = candidateDir == "long" ? candidateEntry + orWidth * 2.0 : candidateEntry - orWidth * 2.0
+labelDir = tradedToday ? lastDir : candidateDir
+labelEntry = tradedToday ? lastEntry : candidateEntry
+labelStop = tradedToday ? lastStop : candidateStop
+labelTp1 = tradedToday ? lastTp1 : candidateTp1
+labelTp2 = tradedToday ? lastTp2 : candidateTp2
+
+f_sigText(_dir, _state, _entry, _sl, _tp1, _tp2) =>
+    "DT|orb|" + _dir + "|" + _state + "|entry=" + str.tostring(_entry, format.mintick) + "|sl=" + str.tostring(_sl, format.mintick) + "|tp1=" + str.tostring(_tp1, format.mintick) + "|tp2=" + str.tostring(_tp2, format.mintick)
+
+showLabel = hasRange and (inOrWindow or inSession or orLocked) and not na(labelEntry) and not na(labelStop) and not na(labelTp1) and not na(labelTp2)
+labelColor = sigState == "triggered" ? color.new(color.green, 0) : sigState == "expired" ? color.new(color.gray, 0) : color.new(color.orange, 0)
+labelStyle = labelDir == "long" ? label.style_label_up : label.style_label_down
+
+if showLabel
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, labelEntry, f_sigText(labelDir, sigState, labelEntry, labelStop, labelTp1, labelTp2), style=labelStyle, color=labelColor, textcolor=color.white)
+
+// Visual history and levels
+orHighPlot = plot(inOrWindow or orLocked ? orHigh : na, "OR High", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+orLowPlot = plot(inOrWindow or orLocked ? orLow : na, "OR Low", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+fill(orHighPlot, orLowPlot, color=color.new(color.yellow, 90), title="OR Range")
+plotshape(longSignal, title="ORB Long", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), text="ORB L", size=size.tiny)
+plotshape(shortSignal, title="ORB Short", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="ORB S", size=size.tiny)
+
+// Alerts
+alertcondition(longSignal, "DT ORB Long", "DT ORB v1 long signal")
+alertcondition(shortSignal, "DT ORB Short", "DT ORB v1 short signal")

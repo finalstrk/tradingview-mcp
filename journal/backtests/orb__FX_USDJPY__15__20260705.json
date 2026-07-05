@@ -1,0 +1,28 @@
+{
+  "setup": "orb",
+  "symbol": "FX:USDJPY",
+  "market": "fx",
+  "tf": "15",
+  "date": "2026-07-05",
+  "period": {
+    "from": "2025-09-01T08:00:00.000Z",
+    "to": "2026-07-03T20:45:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "London",
+    "orWindow": "0800-0830",
+    "maxOrWidthAtr": 2.5,
+    "signalValidityBars": 24
+  },
+  "trades": 461,
+  "winrate": 0.518438,
+  "winrate_pct": 51.84,
+  "pf": 1.004114,
+  "max_dd_pct": 0.24,
+  "net_profit_pct": 0.01,
+  "avg_trade": 0.109932,
+  "currency": "JPY",
+  "verdict": "fail",
+  "criteria": "failed:wr/pf",
+  "notes": "TradingView strategy report via CDP; repo DT ORB v1 strategy saved as Pine version 15.0 before run."
+}

@@ -1,0 +1,228 @@
+//@version=6
+indicator("DT PDH PDL Break v1", overlay=true, max_labels_count=50, max_lines_count=20)
+
+// Inputs
+groupSession = "Session"
+sessionPreset = input.string("NY", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+
+groupSignal = "Signal"
+retestTimeout = input.int(12, "Retest timeout (bars)", minval=1, group=groupSignal)
+
+// Session preset resolution
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+
+// Previous-day levels
+// The [1] offset requests the completed daily candle, while lookahead_on only propagates that already-offset value to intraday bars.
+// This combination avoids using the current unfinished daily high/low, so PDH/PDL do not repaint intraday.
+[pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+// Global per-bar calculations
+atr = ta.atr(14)
+newDay = timeframe.change("D")
+dayRange = pdh - pdl
+levelsReady = not na(pdh) and not na(pdl)
+
+f_signalText(string dir, string state, float entry, float sl, float tp1, float tp2) =>
+    "DT|pdh_pdl_break|" + dir + "|" + state + "|entry=" + str.tostring(entry, format.mintick) + "|sl=" + str.tostring(sl, format.mintick) + "|tp1=" + str.tostring(tp1, format.mintick) + "|tp2=" + str.tostring(tp2, format.mintick)
+
+// Current-day PDH/PDL lines
+var line pdhLine = na
+var line pdlLine = na
+
+if newDay or na(pdhLine) or na(pdlLine)
+    if not na(pdhLine)
+        line.delete(pdhLine)
+    if not na(pdlLine)
+        line.delete(pdlLine)
+    if levelsReady
+        pdhLine := line.new(bar_index, pdh, bar_index + 1, pdh, extend=extend.right, color=color.new(color.green, 0), width=1)
+        pdlLine := line.new(bar_index, pdl, bar_index + 1, pdl, extend=extend.right, color=color.new(color.red, 0), width=1)
+else
+    line.set_y1(pdhLine, pdh)
+    line.set_y2(pdhLine, pdh)
+    line.set_y1(pdlLine, pdl)
+    line.set_y2(pdlLine, pdl)
+
+// State machine storage
+var int stateL = 0
+var int stateS = 0
+var int waitBarsL = 0
+var int waitBarsS = 0
+var bool tradedLongToday = false
+var bool tradedShortToday = false
+
+var float pendingEntryL = na
+var float pendingSlL = na
+var float pendingTp1L = na
+var float pendingTp2L = na
+var float pendingEntryS = na
+var float pendingSlS = na
+var float pendingTp1S = na
+var float pendingTp2S = na
+
+if newDay
+    stateL := 0
+    stateS := 0
+    waitBarsL := 0
+    waitBarsS := 0
+    tradedLongToday := false
+    tradedShortToday := false
+
+// Per-bar event flags
+longForming = false
+shortForming = false
+longSignal = false
+shortSignal = false
+longExpired = false
+shortExpired = false
+
+float eventEntry = na
+float eventSl = na
+float eventTp1 = na
+float eventTp2 = na
+float eventY = na
+string eventDir = ""
+string eventState = ""
+
+// Long break and retest
+if inSession and levelsReady
+    if stateL == 0 and not tradedLongToday and close > pdh
+        stateL := 1
+        waitBarsL := 0
+        pendingEntryL := close
+        pendingSlL := low - atr * 0.25
+        pendingTp1L := pendingEntryL + (pendingEntryL - pendingSlL) * 1.5
+        pendingTp2L := pdh + dayRange * 0.5
+        longForming := true
+        eventEntry := pendingEntryL
+        eventSl := pendingSlL
+        eventTp1 := pendingTp1L
+        eventTp2 := pendingTp2L
+        eventY := low
+        eventDir := "long"
+        eventState := "forming"
+    else if stateL == 1
+        waitBarsL := waitBarsL + 1
+        retestL = low <= pdh and close > pdh
+        timeoutL = waitBarsL > retestTimeout
+        invalidL = close < pdh
+        if retestL and waitBarsL <= retestTimeout and not tradedLongToday
+            pendingEntryL := close
+            pendingSlL := low - atr * 0.25
+            pendingTp1L := pendingEntryL + (pendingEntryL - pendingSlL) * 1.5
+            pendingTp2L := pdh + dayRange * 0.5
+            longSignal := true
+            tradedLongToday := true
+            stateL := 2
+            eventEntry := pendingEntryL
+            eventSl := pendingSlL
+            eventTp1 := pendingTp1L
+            eventTp2 := pendingTp2L
+            eventY := low
+            eventDir := "long"
+            eventState := "triggered"
+        else if timeoutL
+            longExpired := true
+            stateL := 0
+            waitBarsL := 0
+            eventEntry := pendingEntryL
+            eventSl := pendingSlL
+            eventTp1 := pendingTp1L
+            eventTp2 := pendingTp2L
+            eventY := close
+            eventDir := "long"
+            eventState := "expired"
+        else if invalidL
+            stateL := 0
+            waitBarsL := 0
+
+// Short break and retest
+if inSession and levelsReady
+    if stateS == 0 and not tradedShortToday and close < pdl
+        stateS := 1
+        waitBarsS := 0
+        pendingEntryS := close
+        pendingSlS := high + atr * 0.25
+        pendingTp1S := pendingEntryS - (pendingSlS - pendingEntryS) * 1.5
+        pendingTp2S := pdl - dayRange * 0.5
+        shortForming := true
+        eventEntry := pendingEntryS
+        eventSl := pendingSlS
+        eventTp1 := pendingTp1S
+        eventTp2 := pendingTp2S
+        eventY := high
+        eventDir := "short"
+        eventState := "forming"
+    else if stateS == 1
+        waitBarsS := waitBarsS + 1
+        retestS = high >= pdl and close < pdl
+        timeoutS = waitBarsS > retestTimeout
+        invalidS = close > pdl
+        if retestS and waitBarsS <= retestTimeout and not tradedShortToday
+            pendingEntryS := close
+            pendingSlS := high + atr * 0.25
+            pendingTp1S := pendingEntryS - (pendingSlS - pendingEntryS) * 1.5
+            pendingTp2S := pdl - dayRange * 0.5
+            shortSignal := true
+            tradedShortToday := true
+            stateS := 2
+            eventEntry := pendingEntryS
+            eventSl := pendingSlS
+            eventTp1 := pendingTp1S
+            eventTp2 := pendingTp2S
+            eventY := high
+            eventDir := "short"
+            eventState := "triggered"
+        else if timeoutS
+            shortExpired := true
+            stateS := 0
+            waitBarsS := 0
+            eventEntry := pendingEntryS
+            eventSl := pendingSlS
+            eventTp1 := pendingTp1S
+            eventTp2 := pendingTp2S
+            eventY := close
+            eventDir := "short"
+            eventState := "expired"
+        else if invalidS
+            stateS := 0
+            waitBarsS := 0
+
+// Latest signal label
+var label sigLabel = na
+
+if eventState != ""
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    labelText = f_signalText(eventDir, eventState, eventEntry, eventSl, eventTp1, eventTp2)
+    labelColor = eventState == "expired" ? color.new(color.gray, 0) : eventDir == "long" ? color.new(color.green, 0) : color.new(color.red, 0)
+    labelStyle = eventDir == "long" ? label.style_label_up : label.style_label_down
+    sigLabel := label.new(bar_index, eventY, labelText, style=labelStyle, color=labelColor, textcolor=color.white)
+
+// Historical markers
+plotshape(longForming, title="PDH Break Long Forming", text="Break", style=shape.triangleup, location=location.abovebar, color=color.new(color.green, 0), textcolor=color.white, size=size.tiny)
+plotshape(longSignal, title="PDH Retest Long Triggered", text="Retest", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), textcolor=color.white, size=size.tiny)
+plotshape(longExpired, title="PDH Retest Long Expired", text="Expired", style=shape.xcross, location=location.abovebar, color=color.new(color.gray, 0), textcolor=color.gray, size=size.tiny)
+
+plotshape(shortForming, title="PDL Break Short Forming", text="Break", style=shape.triangledown, location=location.belowbar, color=color.new(color.red, 0), textcolor=color.white, size=size.tiny)
+plotshape(shortSignal, title="PDL Retest Short Triggered", text="Retest", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), textcolor=color.white, size=size.tiny)
+plotshape(shortExpired, title="PDL Retest Short Expired", text="Expired", style=shape.xcross, location=location.belowbar, color=color.new(color.gray, 0), textcolor=color.gray, size=size.tiny)
+
+alertcondition(longSignal, "DT PDH PDL Break Long", "DT PDH PDL Break long triggered")
+alertcondition(shortSignal, "DT PDH PDL Break Short", "DT PDH PDL Break short triggered")

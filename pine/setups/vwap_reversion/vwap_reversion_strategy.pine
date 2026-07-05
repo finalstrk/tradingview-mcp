@@ -1,0 +1,161 @@
+//@version=6
+strategy("DT VWAP Reversion v1", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     commission_type=strategy.commission.percent, commission_value=0.005,
+     slippage=2, process_orders_on_close=true, calc_on_every_tick=false)
+
+// Input groups
+groupSession = "Session"
+groupSignal = "Signal"
+groupDisplay = "Display"
+
+// Session inputs
+sessionPreset = input.string("NY", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+
+// Signal inputs
+rsiLength = input.int(14, "RSI length", minval=1, group=groupSignal)
+rsiOversold = input.float(35.0, "RSI oversold", minval=0.0, maxval=100.0, step=0.5, group=groupSignal)
+rsiOverbought = input.float(65.0, "RSI overbought", minval=0.0, maxval=100.0, step=0.5, group=groupSignal)
+trendDayThreshold = input.float(1.5, "Trend day threshold", minval=0.0, step=0.1, group=groupSignal)
+maxSignalsPerDay = input.int(2, "Max signals per day", minval=0, group=groupSignal)
+
+// Display inputs
+showBands = input.bool(true, "Show VWAP bands", group=groupDisplay)
+
+// Session resolution
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+newDay = timeframe.change("D")
+eodExit = inSession[1] and not inSession
+
+// Global calculations
+dailyAnchor = timeframe.change("D")
+[vwapVal, upper2, lower2] = ta.vwap(hlc3, dailyAnchor, 2.0)
+[vwapOne, upper1, lower1] = ta.vwap(hlc3, dailyAnchor, 1.0)
+rsiVal = ta.rsi(close, rsiLength)
+emaFast = ta.ema(close, 20)
+emaSlow = ta.ema(close, 50)
+atrVal = ta.atr(14)
+trendScore = atrVal > 0.0 ? math.abs(emaFast - emaSlow) / atrVal : 0.0
+strongTrend = trendScore > trendDayThreshold
+
+// Daily state
+var int signalCountToday = 0
+var bool longForming = false
+var bool shortForming = false
+var float activeLongSl = na
+var float activeLongTp1 = na
+var float activeLongTp2 = na
+var float activeShortSl = na
+var float activeShortTp1 = na
+var float activeShortTp2 = na
+
+if newDay
+    signalCountToday := 0
+    longForming := false
+    shortForming := false
+
+// Setup states
+hasSignalSlot = signalCountToday < maxSignalsPerDay
+canEvaluate = inSession and hasSignalSlot
+longOutside = canEvaluate and low < lower2
+shortOutside = canEvaluate and high > upper2
+longFormingEvent = longOutside and close <= lower2 and not strongTrend and not longForming
+shortFormingEvent = shortOutside and close >= upper2 and not strongTrend and not shortForming
+longExpired = longForming and strongTrend
+shortExpired = shortForming and strongTrend
+longSignal = canEvaluate and not strongTrend and low < lower2 and close > lower2 and rsiVal < rsiOversold
+shortSignal = canEvaluate and not strongTrend and high > upper2 and close < upper2 and rsiVal > rsiOverbought
+
+if longFormingEvent
+    longForming := true
+    shortForming := false
+
+if shortFormingEvent
+    shortForming := true
+    longForming := false
+
+if longExpired
+    longForming := false
+
+if shortExpired
+    shortForming := false
+
+if longSignal
+    signalCountToday := signalCountToday + 1
+    longForming := false
+    shortForming := false
+
+if shortSignal
+    signalCountToday := signalCountToday + 1
+    shortForming := false
+    longForming := false
+
+if not inSession
+    longForming := false
+    shortForming := false
+
+// Risk levels
+longSl = low - atrVal * 0.5
+longTp1 = vwapVal
+longTp2 = upper1
+shortSl = high + atrVal * 0.5
+shortTp1 = vwapVal
+shortTp2 = lower1
+
+// Orders
+if eodExit
+    strategy.close_all("EOD")
+
+if longSignal and inSession
+    activeLongSl := longSl
+    activeLongTp1 := longTp1
+    activeLongTp2 := longTp2
+    strategy.entry("Long", strategy.long)
+
+if shortSignal and inSession
+    activeShortSl := shortSl
+    activeShortTp1 := shortTp1
+    activeShortTp2 := shortTp2
+    strategy.entry("Short", strategy.short)
+
+if strategy.position_size > 0
+    strategy.exit("Long TP1", "Long", stop=activeLongSl, limit=activeLongTp1, qty_percent=50)
+    strategy.exit("Long TP2", "Long", stop=activeLongSl, limit=activeLongTp2, qty_percent=50)
+
+if strategy.position_size < 0
+    strategy.exit("Short TP1", "Short", stop=activeShortSl, limit=activeShortTp1, qty_percent=50)
+    strategy.exit("Short TP2", "Short", stop=activeShortSl, limit=activeShortTp2, qty_percent=50)
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    activeLongSl := na
+    activeLongTp1 := na
+    activeLongTp2 := na
+    activeShortSl := na
+    activeShortTp1 := na
+    activeShortTp2 := na
+
+// Plots
+plot(showBands ? vwapVal : na, "VWAP", color=color.new(color.yellow, 0), linewidth=2)
+plot(showBands ? upper1 : na, "+1σ", color=color.new(color.teal, 0))
+plot(showBands ? lower1 : na, "-1σ", color=color.new(color.teal, 0))
+plot(showBands ? upper2 : na, "+2σ", color=color.new(color.orange, 0))
+plot(showBands ? lower2 : na, "-2σ", color=color.new(color.orange, 0))
+
+plotshape(longSignal, title="Long signal", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="L")
+plotshape(shortSignal, title="Short signal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")

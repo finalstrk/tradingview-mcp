@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-07-05T14:34:15.462Z",
+  "group_by": [
+    "setup",
+    "market",
+    "mode"
+  ],
+  "stats": {
+    "orb": {
+      "fx": {
+        "replay": {
+          "n": 1,
+          "wins": 1,
+          "win_rate": 1,
+          "avg_r": 1,
+          "expectancy": 1,
+          "plan_adherence": 1
+        }
+      }
+    }
+  }
+}
