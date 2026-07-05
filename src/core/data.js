@@ -138,24 +138,80 @@ export async function getStrategyResults() {
       try {
         var chart = ${CHART_API}._chartWidget;
         var sources = chart.model().model().dataSources();
+        function isStrategySource(s) {
+          return !!(s && (s.reportData || s.ordersData || s.tradesData || s.equityData || s._reportData || s._reportDataBuffer || s._strategyOrdersPaneView || s._orders));
+        }
         var strat = null;
         for (var i = 0; i < sources.length; i++) {
           var s = sources[i];
-          if (s.metaInfo && s.metaInfo().is_price_study === false && (s.reportData || s.performance)) { strat = s; break; }
+          if (s.metaInfo && isStrategySource(s)) { strat = s; break; }
         }
         if (!strat) return {metrics: {}, source: 'internal_api', error: 'No strategy found on chart. Add a strategy indicator first.'};
+        function pct(v) { return typeof v === 'number' ? Math.round(v * 10000) / 100 : null; }
+        function roundNum(v) { return typeof v === 'number' ? Math.round(v * 1000000) / 1000000 : v; }
+        function summarizeSide(side) {
+          side = side || {};
+          return {
+            total_trades: side.totalTrades ?? null,
+            winning_trades: side.numberOfWiningTrades ?? null,
+            losing_trades: side.numberOfLosingTrades ?? null,
+            winrate: roundNum(side.percentProfitable ?? null),
+            winrate_pct: pct(side.percentProfitable),
+            profit_factor: roundNum(side.profitFactor ?? null),
+            net_profit: roundNum(side.netProfit ?? null),
+            net_profit_pct: pct(side.netProfitPercent),
+            gross_profit: roundNum(side.grossProfit ?? null),
+            gross_loss: roundNum(side.grossLoss ?? null),
+            avg_trade: roundNum(side.avgTrade ?? null),
+            avg_trade_pct: pct(side.avgTradePercent),
+          };
+        }
+        function periodFromReport(rd) {
+          var range = rd && rd.settings && rd.settings.dateRange;
+          var bt = range && range.backtest;
+          var tr = range && range.trade;
+          return {
+            backtest_from: bt && bt.from ? new Date(bt.from).toISOString() : null,
+            backtest_to: bt && bt.to ? new Date(bt.to).toISOString() : null,
+            trade_from: tr && tr.from ? new Date(tr.from).toISOString() : null,
+            trade_to: tr && tr.to ? new Date(tr.to).toISOString() : null,
+          };
+        }
         var metrics = {};
         if (strat.reportData) {
           var rd = typeof strat.reportData === 'function' ? strat.reportData() : strat.reportData;
           if (rd && typeof rd === 'object') {
             if (typeof rd.value === 'function') rd = rd.value();
-            if (rd) { var keys = Object.keys(rd); for (var k = 0; k < keys.length; k++) { var val = rd[keys[k]]; if (val !== null && val !== undefined && typeof val !== 'function') metrics[keys[k]] = val; } }
+            if (rd && rd.performance) {
+              var p = rd.performance;
+              var all = summarizeSide(p.all);
+              metrics = {
+                name: strat.metaInfo().description || strat.metaInfo().shortDescription || null,
+                currency: rd.currency || null,
+                period: periodFromReport(rd),
+                trade_count: Array.isArray(rd.trades) ? rd.trades.length : all.total_trades,
+                filled_order_count: Array.isArray(rd.filledOrders) ? rd.filledOrders.length : null,
+                winrate: all.winrate,
+                winrate_pct: all.winrate_pct,
+                pf: all.profit_factor,
+                max_dd: roundNum(p.maxStrategyDrawDown ?? null),
+                max_dd_pct: pct(p.maxStrategyDrawDownPercent),
+                net_profit: all.net_profit,
+                net_profit_pct: all.net_profit_pct,
+                avg_trade: all.avg_trade,
+                sharpe: roundNum(p.sharpeRatio ?? null),
+                sortino: roundNum(p.sortinoRatio ?? null),
+                all: all,
+                long: summarizeSide(p.long),
+                short: summarizeSide(p.short),
+              };
+            }
           }
         }
         if (Object.keys(metrics).length === 0 && strat.performance) {
           var perf = strat.performance();
           if (perf && typeof perf.value === 'function') perf = perf.value();
-          if (perf && typeof perf === 'object') { var pkeys = Object.keys(perf); for (var p = 0; p < pkeys.length; p++) { var pval = perf[pkeys[p]]; if (pval !== null && pval !== undefined && typeof pval !== 'function') metrics[pkeys[p]] = pval; } }
+          if (perf && typeof perf === 'object') { var pkeys = Object.keys(perf); for (var pi = 0; pi < pkeys.length; pi++) { var pval = perf[pkeys[pi]]; if (pval !== null && pval !== undefined && typeof pval !== 'function') metrics[pkeys[pi]] = pval; } }
         }
         return {metrics: metrics, source: 'internal_api'};
       } catch(e) { return {metrics: {}, source: 'internal_api', error: e.message}; }
@@ -171,14 +227,22 @@ export async function getTrades({ max_trades } = {}) {
       try {
         var chart = ${CHART_API}._chartWidget;
         var sources = chart.model().model().dataSources();
+        function isStrategySource(s) {
+          return !!(s && (s.reportData || s.ordersData || s.tradesData || s.equityData || s._reportData || s._reportDataBuffer || s._strategyOrdersPaneView || s._orders));
+        }
         var strat = null;
         for (var i = 0; i < sources.length; i++) {
           var s = sources[i];
-          if (s.metaInfo && s.metaInfo().is_price_study === false && (s.ordersData || s.reportData)) { strat = s; break; }
+          if (s.metaInfo && isStrategySource(s)) { strat = s; break; }
         }
         if (!strat) return {trades: [], source: 'internal_api', error: 'No strategy found on chart.'};
         var orders = null;
-        if (strat.ordersData) { orders = typeof strat.ordersData === 'function' ? strat.ordersData() : strat.ordersData; if (orders && typeof orders.value === 'function') orders = orders.value(); }
+        if (strat.reportData) {
+          var rd = typeof strat.reportData === 'function' ? strat.reportData() : strat.reportData;
+          if (rd && typeof rd.value === 'function') rd = rd.value();
+          if (rd && Array.isArray(rd.trades)) orders = rd.trades;
+        }
+        if (!orders && strat.ordersData) { orders = typeof strat.ordersData === 'function' ? strat.ordersData() : strat.ordersData; if (orders && typeof orders.value === 'function') orders = orders.value(); }
         if (!orders || !Array.isArray(orders)) {
           if (strat._orders) orders = strat._orders;
           else if (strat.tradesData) { orders = typeof strat.tradesData === 'function' ? strat.tradesData() : strat.tradesData; if (orders && typeof orders.value === 'function') orders = orders.value(); }
@@ -189,8 +253,28 @@ export async function getTrades({ max_trades } = {}) {
           var o = orders[t];
           if (typeof o === 'object' && o !== null) {
             var trade = {};
-            var okeys = Object.keys(o);
-            for (var k = 0; k < okeys.length; k++) { var v = o[okeys[k]]; if (v !== null && v !== undefined && typeof v !== 'function' && typeof v !== 'object') trade[okeys[k]] = v; }
+            if (o.e || o.x) {
+              trade.entry_id = o.e && o.e.c;
+              trade.entry_price = o.e && o.e.p;
+              trade.entry_time = o.e && o.e.tm ? new Date(o.e.tm).toISOString() : null;
+              trade.entry_bar = o.e && o.e.b;
+              trade.entry_type = o.e && o.e.tp;
+              trade.exit_id = o.x && o.x.c;
+              trade.exit_price = o.x && o.x.p;
+              trade.exit_time = o.x && o.x.tm ? new Date(o.x.tm).toISOString() : null;
+              trade.exit_bar = o.x && o.x.b;
+              trade.exit_type = o.x && o.x.tp;
+              trade.qty = o.q;
+              trade.profit = o.tp && o.tp.v;
+              trade.profit_pct = o.tp && o.tp.p;
+              trade.cum_profit = o.cp && o.cp.v;
+              trade.runup = o.rn && o.rn.v;
+              trade.drawdown = o.dd && o.dd.v;
+              trade.value = o.v;
+            } else {
+              var okeys = Object.keys(o);
+              for (var k = 0; k < okeys.length; k++) { var v = o[okeys[k]]; if (v !== null && v !== undefined && typeof v !== 'function' && typeof v !== 'object') trade[okeys[k]] = v; }
+            }
             result.push(trade);
           }
         }
@@ -207,10 +291,13 @@ export async function getEquity() {
       try {
         var chart = ${CHART_API}._chartWidget;
         var sources = chart.model().model().dataSources();
+        function isStrategySource(s) {
+          return !!(s && (s.reportData || s.ordersData || s.tradesData || s.equityData || s._reportData || s._reportDataBuffer || s._strategyOrdersPaneView || s._orders));
+        }
         var strat = null;
         for (var i = 0; i < sources.length; i++) {
           var s = sources[i];
-          if (s.metaInfo && s.metaInfo().is_price_study === false && (s.reportData || s.performance)) { strat = s; break; }
+          if (s.metaInfo && isStrategySource(s)) { strat = s; break; }
         }
         if (!strat) return {data: [], source: 'internal_api', error: 'No strategy found on chart.'};
         var data = [];
@@ -228,10 +315,26 @@ export async function getEquity() {
         }
         if (data.length === 0) {
           var perfData = {};
-          if (strat.performance) {
-            var perf = strat.performance();
+          var perf = null;
+          if (strat.reportData) {
+            var rd = typeof strat.reportData === 'function' ? strat.reportData() : strat.reportData;
+            if (rd && typeof rd.value === 'function') rd = rd.value();
+            if (rd && rd.performance) perf = rd.performance;
+          }
+          if (!perf && strat.performance) {
+            perf = strat.performance();
             if (perf && typeof perf.value === 'function') perf = perf.value();
-            if (perf && typeof perf === 'object') { var pkeys = Object.keys(perf); for (var p = 0; p < pkeys.length; p++) { if (/equity|drawdown|profit|net/i.test(pkeys[p])) perfData[pkeys[p]] = perf[pkeys[p]]; } }
+          }
+          if (perf && typeof perf === 'object') {
+            var pkeys = Object.keys(perf);
+            for (var p = 0; p < pkeys.length; p++) { if (/equity|drawdown|profit|net|runup|return/i.test(pkeys[p])) perfData[pkeys[p]] = perf[pkeys[p]]; }
+            if (perf.all) {
+              perfData.netProfit = perf.all.netProfit;
+              perfData.netProfitPercent = perf.all.netProfitPercent;
+              perfData.totalTrades = perf.all.totalTrades;
+              perfData.profitFactor = perf.all.profitFactor;
+              perfData.percentProfitable = perf.all.percentProfitable;
+            }
           }
           if (Object.keys(perfData).length > 0) return {data: [], equity_summary: perfData, source: 'internal_api', note: 'Full equity curve not available via API; equity summary metrics returned instead.'};
         }
