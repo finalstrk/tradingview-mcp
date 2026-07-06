@@ -1,0 +1,30 @@
+{
+  "setup": "nr_squeeze",
+  "symbol": "FX:AUDUSD",
+  "market": "fx",
+  "tf": "5",
+  "date": "2026-07-05",
+  "period": {
+    "from": "2026-03-30T18:45:00.000Z",
+    "to": "2026-07-06T09:40:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "NY",
+    "customSession": "0930-1600",
+    "customTimezone": "America/New_York",
+    "nrLookback": 7,
+    "breakoutWindowBars": 3,
+    "maxSignalsPerDay": 2
+  },
+  "trades": 257,
+  "winrate": 0.354086,
+  "winrate_pct": 35.41,
+  "pf": 0.585523,
+  "max_dd_pct": 0.27,
+  "net_profit_pct": -0.26,
+  "avg_trade": -10.280625,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "failed:wr/pf",
+  "notes": "TradingView strategy report via CDP; repo DT NR Squeeze v1 strategy saved before run. Pine list scriptName remained DT ORB v1 while chart/study title was DT NR Squeeze v1. First batch lost CDP after USDJPY; remaining symbols were rerun after relaunch/navigation and merged from successful rows only."
+}

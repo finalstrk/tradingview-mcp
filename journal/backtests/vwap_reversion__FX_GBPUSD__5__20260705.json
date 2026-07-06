@@ -1,0 +1,32 @@
+{
+  "setup": "vwap_reversion",
+  "symbol": "FX:GBPUSD",
+  "market": "fx",
+  "tf": "5",
+  "date": "2026-07-05",
+  "period": {
+    "from": "2026-04-03T13:30:00.000Z",
+    "to": "2026-07-03T20:55:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "NY",
+    "customSession": "0930-1600",
+    "customTimezone": "America/New_York",
+    "rsiLength": 14,
+    "rsiOversold": 35.0,
+    "rsiOverbought": 65.0,
+    "trendDayThreshold": 1.5,
+    "maxSignalsPerDay": 2
+  },
+  "trades": 36,
+  "winrate": 0.166667,
+  "winrate_pct": 16.67,
+  "pf": 0.248938,
+  "max_dd_pct": 0.08,
+  "net_profit_pct": -0.08,
+  "avg_trade": -22.192832,
+  "currency": "USD",
+  "verdict": "insufficient_data",
+  "criteria": "n<100",
+  "notes": "TradingView strategy report via CDP; repo DT VWAP Reversion v1 strategy saved before run. Pine list scriptName remained DT ORB v1 while chart/study title was DT VWAP Reversion v1."
+}

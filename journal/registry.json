@@ -83,14 +83,25 @@
       "status": "candidate",
       "markets": {
         "fx": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "5",
             "15"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null
+          "evidence": [
+            "journal/backtests/vwap_reversion__FX_USDJPY__5__20260705.json",
+            "journal/backtests/vwap_reversion__FX_USDJPY__15__20260705.json",
+            "journal/backtests/vwap_reversion__FX_EURUSD__5__20260705.json",
+            "journal/backtests/vwap_reversion__FX_EURUSD__15__20260705.json",
+            "journal/backtests/vwap_reversion__FX_GBPUSD__5__20260705.json",
+            "journal/backtests/vwap_reversion__FX_GBPUSD__15__20260705.json",
+            "journal/backtests/vwap_reversion__FX_AUDUSD__5__20260705.json",
+            "journal/backtests/vwap_reversion__FX_AUDUSD__15__20260705.json"
+          ],
+          "bt_winrate": 0.325091,
+          "bt_pf": 0.844102,
+          "updated": "2026-07-05",
+          "notes": "NY session. 5m runs were n<100; all sufficient 15m runs failed WR/PF threshold, so market status is rejected."
         },
         "futures": {
           "status": "candidate",
@@ -144,14 +155,25 @@
       "status": "candidate",
       "markets": {
         "fx": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "5",
             "15"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null
+          "evidence": [
+            "journal/backtests/pdh_pdl_break__FX_USDJPY__5__20260705.json",
+            "journal/backtests/pdh_pdl_break__FX_USDJPY__15__20260705.json",
+            "journal/backtests/pdh_pdl_break__FX_EURUSD__5__20260705.json",
+            "journal/backtests/pdh_pdl_break__FX_EURUSD__15__20260705.json",
+            "journal/backtests/pdh_pdl_break__FX_GBPUSD__5__20260705.json",
+            "journal/backtests/pdh_pdl_break__FX_GBPUSD__15__20260705.json",
+            "journal/backtests/pdh_pdl_break__FX_AUDUSD__5__20260705.json",
+            "journal/backtests/pdh_pdl_break__FX_AUDUSD__15__20260705.json"
+          ],
+          "bt_winrate": 0.391143,
+          "bt_pf": 0.894389,
+          "updated": "2026-07-05",
+          "notes": "NY session. 5m runs were n<100; only EURUSD 15m passed, not a market majority, so market status is rejected."
         },
         "futures": {
           "status": "candidate",
@@ -205,14 +227,25 @@
       "status": "candidate",
       "markets": {
         "fx": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "5",
             "15"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null
+          "evidence": [
+            "journal/backtests/ema_pullback__FX_USDJPY__5__20260705.json",
+            "journal/backtests/ema_pullback__FX_USDJPY__15__20260705.json",
+            "journal/backtests/ema_pullback__FX_EURUSD__5__20260705.json",
+            "journal/backtests/ema_pullback__FX_EURUSD__15__20260705.json",
+            "journal/backtests/ema_pullback__FX_GBPUSD__5__20260705.json",
+            "journal/backtests/ema_pullback__FX_GBPUSD__15__20260705.json",
+            "journal/backtests/ema_pullback__FX_AUDUSD__5__20260705.json",
+            "journal/backtests/ema_pullback__FX_AUDUSD__15__20260705.json"
+          ],
+          "bt_winrate": 0.284925,
+          "bt_pf": 0.675665,
+          "updated": "2026-07-05",
+          "notes": "NY session. All runs had n>=100, but every symbol/timeframe failed WR/PF threshold, so market status is rejected."
         },
         "futures": {
           "status": "candidate",
@@ -266,14 +299,25 @@
       "status": "candidate",
       "markets": {
         "fx": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "5",
             "15"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null
+          "evidence": [
+            "journal/backtests/nr_squeeze__FX_USDJPY__5__20260705.json",
+            "journal/backtests/nr_squeeze__FX_USDJPY__15__20260705.json",
+            "journal/backtests/nr_squeeze__FX_EURUSD__5__20260705.json",
+            "journal/backtests/nr_squeeze__FX_EURUSD__15__20260705.json",
+            "journal/backtests/nr_squeeze__FX_GBPUSD__5__20260705.json",
+            "journal/backtests/nr_squeeze__FX_GBPUSD__15__20260705.json",
+            "journal/backtests/nr_squeeze__FX_AUDUSD__5__20260705.json",
+            "journal/backtests/nr_squeeze__FX_AUDUSD__15__20260705.json"
+          ],
+          "bt_winrate": 0.398104,
+          "bt_pf": 0.628964,
+          "updated": "2026-07-05",
+          "notes": "NY session. All runs had n>=100, but every symbol/timeframe failed WR/PF threshold, so market status is rejected."
         },
         "futures": {
           "status": "candidate",

@@ -1,0 +1,28 @@
+{
+  "setup": "pdh_pdl_break",
+  "symbol": "FX:USDJPY",
+  "market": "fx",
+  "tf": "15",
+  "date": "2026-07-05",
+  "period": {
+    "from": "2025-09-09T15:15:00.000Z",
+    "to": "2026-07-05T22:30:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "NY",
+    "customSession": "0930-1600",
+    "customTimezone": "America/New_York",
+    "retestTimeoutBars": 12
+  },
+  "trades": 127,
+  "winrate": 0.417323,
+  "winrate_pct": 41.73,
+  "pf": 1.151232,
+  "max_dd_pct": 0.05,
+  "net_profit_pct": 0.03,
+  "avg_trade": 2.573029,
+  "currency": "JPY",
+  "verdict": "fail",
+  "criteria": "failed:wr/pf",
+  "notes": "TradingView strategy report via CDP; repo DT PDH PDL Break v1 strategy saved before run. Pine list scriptName remained DT ORB v1 while chart/study title was DT PDH PDL Break v1."
+}

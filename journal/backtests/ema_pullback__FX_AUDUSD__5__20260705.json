@@ -1,0 +1,33 @@
+{
+  "setup": "ema_pullback",
+  "symbol": "FX:AUDUSD",
+  "market": "fx",
+  "tf": "5",
+  "date": "2026-07-05",
+  "period": {
+    "from": "2026-03-30T15:10:00.000Z",
+    "to": "2026-07-05T22:45:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "NY",
+    "customSession": "0930-1600",
+    "customTimezone": "America/New_York",
+    "emaFastLen": 20,
+    "emaSlowLen": 50,
+    "slopeLookback": 5,
+    "triggerWindowBars": 3,
+    "maxDistanceAtr": 1.0,
+    "maxSignalsPerDay": 2
+  },
+  "trades": 113,
+  "winrate": 0.300885,
+  "winrate_pct": 30.09,
+  "pf": 0.903832,
+  "max_dd_pct": 0.08,
+  "net_profit_pct": -0.04,
+  "avg_trade": -3.581591,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "failed:wr/pf",
+  "notes": "TradingView strategy report via CDP; repo DT EMA Pullback v1 strategy saved before run. Pine list scriptName remained DT ORB v1 while chart/study title was DT EMA Pullback v1."
+}

@@ -1,0 +1,28 @@
+{
+  "setup": "pdh_pdl_break",
+  "symbol": "FX:EURUSD",
+  "market": "fx",
+  "tf": "15",
+  "date": "2026-07-05",
+  "period": {
+    "from": "2025-09-01T14:15:00.000Z",
+    "to": "2026-07-05T22:30:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "NY",
+    "customSession": "0930-1600",
+    "customTimezone": "America/New_York",
+    "retestTimeoutBars": 12
+  },
+  "trades": 123,
+  "winrate": 0.471545,
+  "winrate_pct": 47.15,
+  "pf": 1.484953,
+  "max_dd_pct": 0.06,
+  "net_profit_pct": 0.08,
+  "avg_trade": 6.241193,
+  "currency": "USD",
+  "verdict": "pass",
+  "criteria": "wr>=45&pf>=1.3",
+  "notes": "TradingView strategy report via CDP; repo DT PDH PDL Break v1 strategy saved before run. Pine list scriptName remained DT ORB v1 while chart/study title was DT PDH PDL Break v1."
+}

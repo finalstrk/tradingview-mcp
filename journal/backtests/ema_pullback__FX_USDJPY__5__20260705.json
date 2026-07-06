@@ -1,0 +1,33 @@
+{
+  "setup": "ema_pullback",
+  "symbol": "FX:USDJPY",
+  "market": "fx",
+  "tf": "5",
+  "date": "2026-07-05",
+  "period": {
+    "from": "2026-03-30T15:00:00.000Z",
+    "to": "2026-07-05T22:45:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "NY",
+    "customSession": "0930-1600",
+    "customTimezone": "America/New_York",
+    "emaFastLen": 20,
+    "emaSlowLen": 50,
+    "slopeLookback": 5,
+    "triggerWindowBars": 3,
+    "maxDistanceAtr": 1.0,
+    "maxSignalsPerDay": 2
+  },
+  "trades": 117,
+  "winrate": 0.145299,
+  "winrate_pct": 14.53,
+  "pf": 0.318656,
+  "max_dd_pct": 0.24,
+  "net_profit_pct": -0.22,
+  "avg_trade": -19.165458,
+  "currency": "JPY",
+  "verdict": "fail",
+  "criteria": "failed:wr/pf",
+  "notes": "TradingView strategy report via CDP; repo DT EMA Pullback v1 strategy saved before run. Pine list scriptName remained DT ORB v1 while chart/study title was DT EMA Pullback v1."
+}
