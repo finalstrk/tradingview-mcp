@@ -28,7 +28,7 @@ Pine strategy のバックテスト統計を市場別に検証し、採用可否
 ## 手順
 
 1. **対象決定**: `$ARGUMENTS` から setup id と市場を決める。市場省略時は `fx` と `futures` を優先する。`journal/registry.json` から `pine_strategy` のパスと `tv_script_name` を取得する。
-2. **コンパイル & 保存**: 対象 `.pine` ファイルを Read し、`pine_set_source`、`pine_smart_compile` の順で実行する。0 エラーまで修正し、エラー時は `skills/pine-develop/SKILL.md` の修正ループに従う。`pine_list_scripts` で名前衝突を確認し、`pine_save` で保存ダイアログを開く。保存ダイアログが出た場合は `ui_click({ by: "text", value: "保存" })` で確定し、再度 `pine_list_scripts` で登録名が存在することを確認してから次へ進む。
+2. **コンパイル & 保存**: 対象 `.pine` ファイルを Read し、`pine_set_source`、`pine_smart_compile` の順で実行する。0 エラーまで修正し、エラー時は `skills/pine-develop/SKILL.md` の修正ループに従う。`pine_list_scripts` で名前衝突を確認し、`pine_save` で保存ダイアログを開く。保存ダイアログが出た場合は `ui_click({ by: "text", value: "保存" })` で確定し、再度 `pine_list_scripts` で登録名が存在することを確認してから次へ進む。既存 Cloud script を開いたまま `pine_set_source` → `pine_save` すると、`scriptName` は旧名のまま `scriptTitle` / chart study title だけが新 strategy 名へ変わる場合がある。採用判定の証跡には chart study title と入力値を記録し、Cloud 上で setup ごとに独立した保存名が必要な場合は true Save As 手順を別途確立する。
 3. **strategy ロード確認**: `chart_get_state` で対象 strategy がチャートに追加されていることを確認してから次へ進む。未ロードのまま `batch_run` すると空結果になるため、必ずこの確認を挟む。
 4. **セッションプリセット**: 市場に応じて `indicator_set_inputs` でプリセットを切り替える。`fx` は `London` または `NY`、`futures` と `stocks_us` は `RTH`、`stocks_jp` は `Tokyo` を使う。
 5. **バックテスト実行**: `batch_run(symbols=<市場セット>, timeframes=["5","15"], action="get_strategy_results")` を実行する。
