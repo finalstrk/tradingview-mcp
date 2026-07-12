@@ -12,8 +12,17 @@ register('launch', {
     port: { type: 'string', short: 'p', description: 'CDP port (default 9222)' },
     'no-kill': { type: 'boolean', description: 'Do not kill existing instances' },
   },
-  handler: (opts) => core.launch({
-    port: opts.port ? Number(opts.port) : undefined,
-    kill_existing: !opts['no-kill'],
-  }),
+  handler: async (opts) => {
+    const result = await core.launch({
+      port: opts.port ? Number(opts.port) : undefined,
+      kill_existing: !opts['no-kill'],
+    });
+
+    if (result?.success === false) {
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(1);
+    }
+
+    return result;
+  },
 });

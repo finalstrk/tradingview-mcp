@@ -2,8 +2,107 @@
  * Core health/discovery/launch logic.
  */
 import { getClient, getTargetInfo, evaluate } from '../connection.js';
-import { existsSync } from 'fs';
+import { accessSync, constants as fsConstants, existsSync } from 'fs';
 import { execSync, spawn } from 'child_process';
+import { get as httpGet } from 'http';
+
+const DEFAULT_PROBE_TIMEOUT = 1000;
+const DEFAULT_LAUNCH_TIMEOUT = 15000;
+const DEFAULT_POLL_INTERVAL = 1000;
+const DEFAULT_HANDOFF_GRACE = 3000;
+
+export async function probeCdpEndpoint({ port = 9222, timeout_ms = DEFAULT_PROBE_TIMEOUT, signal, _deps } = {}) {
+  const get = _deps?.httpGet || httpGet;
+  const schedule = _deps?.setTimeout || setTimeout;
+  const cancel = _deps?.clearTimeout || clearTimeout;
+  const timeout = Math.max(1, Number(timeout_ms) || DEFAULT_PROBE_TIMEOUT);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let request;
+    let timer;
+
+    const onAbort = () => {
+      try { request?.destroy(new Error('CDP readiness probe cancelled')); } catch {}
+      finish(null);
+    };
+
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) cancel(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve(value);
+    };
+
+    if (signal?.aborted) {
+      finish(null);
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    timer = schedule(() => {
+      try { request?.destroy(new Error('CDP readiness probe timed out')); } catch {}
+      finish(null);
+    }, timeout);
+
+    try {
+      request = get(`http://localhost:${port}/json/version`, (response) => {
+        let data = '';
+        response.on('data', chunk => { data += chunk; });
+        response.on('error', () => finish(null));
+        response.on('end', () => {
+          try {
+            const info = JSON.parse(data);
+            finish(response.statusCode === 200 && info?.Browser && info?.webSocketDebuggerUrl ? info : null);
+          } catch {
+            finish(null);
+          }
+        });
+      });
+      request.setTimeout?.(timeout, () => {
+        try { request.destroy(new Error('CDP readiness probe timed out')); } catch {}
+        finish(null);
+      });
+      request.on('error', () => finish(null));
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+function launchFailure({ phase, port, oldProcessKilled, error, action, message, binary, pid }) {
+  return {
+    success: false,
+    cdp_ready: false,
+    phase,
+    cdp_port: port,
+    old_process_killed: oldProcessKilled,
+    error,
+    recovery: { action, message },
+    ...(binary && { binary }),
+    ...(pid && { pid }),
+  };
+}
+
+function readyLaunchResult({ info, port, platform, binary, pid, reused, oldProcessKilled, launcherHandoff = false }) {
+  return {
+    success: true,
+    cdp_ready: true,
+    phase: reused ? 'reuse' : 'ready',
+    reused,
+    old_process_killed: oldProcessKilled,
+    launcher_handoff: launcherHandoff,
+    platform,
+    binary: binary || null,
+    pid: pid || null,
+    cdp_port: port,
+    cdp_url: `http://localhost:${port}`,
+    browser: info.Browser,
+    user_agent: info['User-Agent'],
+    web_socket_debugger_url: info.webSocketDebuggerUrl,
+  };
+}
 
 export async function healthCheck() {
   await getClient();
@@ -159,25 +258,95 @@ export async function uiState() {
   return { success: true, ...state };
 }
 
-export async function launch({ port, kill_existing } = {}) {
-  const cdpPort = port || 9222;
+export async function launch({
+  port,
+  kill_existing,
+  request_timeout_ms,
+  overall_timeout_ms,
+  poll_interval_ms,
+  handoff_grace_ms,
+  _deps,
+} = {}) {
+  const fileExists = _deps?.existsSync || existsSync;
+  const fileAccess = _deps?.accessSync || accessSync;
+  const runSync = _deps?.execSync || execSync;
+  const spawnProcess = _deps?.spawn || spawn;
+  const probe = _deps?.probeCdpEndpoint || probeCdpEndpoint;
+  const sleep = _deps?.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const schedule = _deps?.setTimeout || setTimeout;
+  const cancel = _deps?.clearTimeout || clearTimeout;
+  const now = _deps?.now || Date.now;
+  const platform = _deps?.platform || process.platform;
+  const env = _deps?.env || process.env;
+  const cdpPort = port === undefined ? 9222 : Number(port);
   const killFirst = kill_existing !== false;
-  const platform = process.platform;
+  const requestTimeout = Math.max(1, Number(request_timeout_ms) || DEFAULT_PROBE_TIMEOUT);
+  const overallTimeout = Math.max(1, Number(overall_timeout_ms) || DEFAULT_LAUNCH_TIMEOUT);
+  const pollInterval = Math.max(1, Number(poll_interval_ms) || DEFAULT_POLL_INTERVAL);
+  const handoffGrace = Math.max(1, Number(handoff_grace_ms) || DEFAULT_HANDOFF_GRACE);
+  const startedAt = now();
+  const overallDeadline = startedAt + overallTimeout;
+  let oldProcessKilled = false;
+
+  const failure = (phase, error, action, message, extra = {}) => launchFailure({
+    phase,
+    port: cdpPort,
+    oldProcessKilled,
+    error,
+    action,
+    message,
+    ...extra,
+  });
+
+  if (!Number.isInteger(cdpPort) || cdpPort < 1 || cdpPort > 65535) {
+    return failure(
+      'preflight',
+      `Invalid CDP port: ${port}`,
+      'choose_valid_port',
+      'Use an integer localhost port between 1 and 65535.',
+    );
+  }
+
+  const probeReady = async (signal, deadline = overallDeadline) => {
+    const remaining = Math.min(overallDeadline, deadline) - now();
+    if (remaining <= 0) return null;
+    try {
+      return await probe({
+        port: cdpPort,
+        timeout_ms: Math.min(requestTimeout, remaining),
+        signal,
+        _deps,
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const existing = await probeReady();
+  if (existing) {
+    return readyLaunchResult({
+      info: existing,
+      port: cdpPort,
+      platform,
+      reused: true,
+      oldProcessKilled: false,
+    });
+  }
 
   const pathMap = {
     darwin: [
       '/Applications/TradingView.app/Contents/MacOS/TradingView',
-      `${process.env.HOME}/Applications/TradingView.app/Contents/MacOS/TradingView`,
+      `${env.HOME}/Applications/TradingView.app/Contents/MacOS/TradingView`,
     ],
     win32: [
-      `${process.env.LOCALAPPDATA}\\TradingView\\TradingView.exe`,
-      `${process.env.PROGRAMFILES}\\TradingView\\TradingView.exe`,
-      `${process.env['PROGRAMFILES(X86)']}\\TradingView\\TradingView.exe`,
+      `${env.LOCALAPPDATA}\\TradingView\\TradingView.exe`,
+      `${env.PROGRAMFILES}\\TradingView\\TradingView.exe`,
+      `${env['PROGRAMFILES(X86)']}\\TradingView\\TradingView.exe`,
     ],
     linux: [
       '/opt/TradingView/tradingview',
       '/opt/TradingView/TradingView',
-      `${process.env.HOME}/.local/share/TradingView/TradingView`,
+      `${env.HOME}/.local/share/TradingView/TradingView`,
       '/usr/bin/tradingview',
       '/snap/tradingview/current/tradingview',
     ],
@@ -185,67 +354,231 @@ export async function launch({ port, kill_existing } = {}) {
 
   let tvPath = null;
   const candidates = pathMap[platform] || pathMap.linux;
-  for (const p of candidates) {
-    if (p && existsSync(p)) { tvPath = p; break; }
+  for (const candidate of candidates) {
+    if (candidate && fileExists(candidate)) {
+      tvPath = candidate;
+      break;
+    }
   }
 
   if (!tvPath) {
     try {
-      const cmd = platform === 'win32' ? 'where TradingView.exe' : 'which tradingview';
-      tvPath = execSync(cmd, { timeout: 3000 }).toString().trim().split('\n')[0];
-      if (tvPath && !existsSync(tvPath)) tvPath = null;
-    } catch { /* ignore */ }
+      const command = platform === 'win32' ? 'where TradingView.exe' : 'which tradingview';
+      const located = runSync(command, { timeout: Math.min(3000, Math.max(1, overallDeadline - now())) })
+        .toString().trim().split('\n')[0];
+      if (located && fileExists(located)) tvPath = located;
+    } catch { /* not found on PATH */ }
   }
 
   if (!tvPath && platform === 'darwin') {
     try {
-      const found = execSync('mdfind "kMDItemFSName == TradingView.app" | head -1', { timeout: 5000 }).toString().trim();
-      if (found) {
-        const candidate = `${found}/Contents/MacOS/TradingView`;
-        if (existsSync(candidate)) tvPath = candidate;
-      }
-    } catch { /* ignore */ }
+      const found = runSync('mdfind "kMDItemFSName == TradingView.app" | head -1', {
+        timeout: Math.min(5000, Math.max(1, overallDeadline - now())),
+      }).toString().trim();
+      const candidate = found ? `${found}/Contents/MacOS/TradingView` : null;
+      if (candidate && fileExists(candidate)) tvPath = candidate;
+    } catch { /* not found by Spotlight */ }
   }
 
   if (!tvPath) {
-    throw new Error(`TradingView not found on ${platform}. Searched: ${candidates.join(', ')}. Launch manually with: /path/to/TradingView --remote-debugging-port=${cdpPort}`);
+    return failure(
+      'preflight',
+      `TradingView not found on ${platform}. Searched: ${candidates.join(', ')}`,
+      'locate_tradingview_binary',
+      `Install TradingView or launch it manually with --remote-debugging-port=${cdpPort}.`,
+    );
+  }
+
+  try {
+    fileAccess(tvPath, platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK);
+  } catch (err) {
+    return failure(
+      'preflight',
+      `TradingView launch prerequisite failed for ${tvPath}: ${err.message}`,
+      'fix_binary_permissions',
+      `Make the TradingView binary executable, then retry with --remote-debugging-port=${cdpPort}.`,
+      { binary: tvPath },
+    );
+  }
+
+  if (now() >= overallDeadline) {
+    return failure(
+      'preflight',
+      'Launch deadline expired during prerequisite checks.',
+      'retry_launch',
+      'Retry after confirming the TradingView binary and localhost CDP port are available.',
+      { binary: tvPath },
+    );
   }
 
   if (killFirst) {
     try {
-      if (platform === 'win32') execSync('taskkill /F /IM TradingView.exe', { timeout: 5000 });
-      else execSync('pkill -f TradingView', { timeout: 5000 });
-      await new Promise(r => setTimeout(r, 1500));
-    } catch { /* may not be running */ }
+      if (platform === 'win32') runSync('taskkill /F /IM TradingView.exe', { timeout: Math.min(5000, Math.max(1, overallDeadline - now())) });
+      else runSync('pkill -f TradingView', { timeout: Math.min(5000, Math.max(1, overallDeadline - now())) });
+      oldProcessKilled = true;
+      const remaining = overallDeadline - now();
+      if (remaining > 0) await sleep(Math.min(1500, remaining));
+    } catch { /* no existing process, continue with launch */ }
   }
 
-  const child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: 'ignore' });
-  child.unref();
-
-  for (let i = 0; i < 15; i++) {
-    await new Promise(r => setTimeout(r, 1000));
-    try {
-      const http = await import('http');
-      const ready = await new Promise((resolve) => {
-        http.get(`http://localhost:${cdpPort}/json/version`, (res) => {
-          let data = '';
-          res.on('data', (chunk) => data += chunk);
-          res.on('end', () => resolve(data));
-        }).on('error', () => resolve(null));
-      });
-      if (ready) {
-        const info = JSON.parse(ready);
-        return {
-          success: true, platform, binary: tvPath, pid: child.pid,
-          cdp_port: cdpPort, cdp_url: `http://localhost:${cdpPort}`,
-          browser: info.Browser, user_agent: info['User-Agent'],
-        };
-      }
-    } catch { /* retry */ }
+  if (now() >= overallDeadline) {
+    return failure(
+      'kill',
+      'Launch deadline expired after stopping the previous TradingView process.',
+      'launch_manually',
+      `Launch TradingView manually with --remote-debugging-port=${cdpPort}.`,
+      { binary: tvPath },
+    );
   }
 
-  return {
-    success: true, platform, binary: tvPath, pid: child.pid, cdp_port: cdpPort, cdp_ready: false,
-    warning: 'TradingView launched but CDP not responding yet. It may still be loading. Try tv_health_check in a few seconds.',
+  let child;
+  try {
+    child = spawnProcess(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: 'ignore' });
+  } catch (err) {
+    return failure(
+      'spawn',
+      `TradingView spawn failed: ${err.message}`,
+      'launch_manually',
+      `Launch ${tvPath} manually with --remote-debugging-port=${cdpPort}.`,
+      { binary: tvPath },
+    );
+  }
+
+  let childError = null;
+  let childExit = null;
+  let childExitAt = null;
+  let activeProbe = null;
+
+  const shortenActiveProbeDeadline = (deadline) => {
+    if (!activeProbe || deadline >= activeProbe.deadline) return;
+    activeProbe.deadline = deadline;
+    if (activeProbe.timer) cancel(activeProbe.timer);
+    const delay = deadline - now();
+    if (delay <= 0) {
+      activeProbe.controller.abort();
+      return;
+    }
+    activeProbe.timer = schedule(() => activeProbe?.controller.abort(), delay);
   };
+
+  const onChildError = err => {
+    childError = err;
+    activeProbe?.controller.abort();
+  };
+  const onChildExit = (code, signal) => {
+    childExit = { code, signal };
+    childExitAt = now();
+    shortenActiveProbeDeadline(Math.min(overallDeadline, childExitAt + handoffGrace));
+  };
+  child.once('error', onChildError);
+  child.once('exit', onChildExit);
+
+  const runReadinessProbe = async () => {
+    const controller = new AbortController();
+    let onAbort;
+    const aborted = new Promise(resolve => {
+      onAbort = () => resolve(null);
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+    });
+    const deadline = Math.min(
+      overallDeadline,
+      now() + requestTimeout,
+      childExitAt === null ? Infinity : childExitAt + handoffGrace,
+    );
+    const probeState = { controller, deadline: Infinity, timer: null };
+    activeProbe = probeState;
+    shortenActiveProbeDeadline(deadline);
+
+    try {
+      return await Promise.race([
+        probeReady(controller.signal, deadline),
+        aborted,
+      ]);
+    } finally {
+      controller.signal.removeEventListener('abort', onAbort);
+      if (probeState.timer) cancel(probeState.timer);
+      if (activeProbe === probeState) activeProbe = null;
+    }
+  };
+
+  try {
+    child.unref();
+
+    while (now() < overallDeadline) {
+      if (childError) {
+        return failure(
+          'spawn',
+          `TradingView spawn failed: ${childError.message}`,
+          'launch_manually',
+          `Launch ${tvPath} manually with --remote-debugging-port=${cdpPort}.`,
+          { binary: tvPath, pid: child.pid },
+        );
+      }
+
+      const info = await runReadinessProbe();
+      if (info) {
+        return readyLaunchResult({
+          info,
+          port: cdpPort,
+          platform,
+          binary: tvPath,
+          pid: child.pid,
+          reused: false,
+          oldProcessKilled,
+          launcherHandoff: childExit !== null,
+        });
+      }
+
+      if (childError) continue;
+
+      const readinessDeadline = childExitAt === null
+        ? overallDeadline
+        : Math.min(overallDeadline, childExitAt + handoffGrace);
+      const remaining = readinessDeadline - now();
+      if (remaining <= 0) break;
+      await sleep(Math.min(pollInterval, remaining));
+    }
+
+    if (childError) {
+      return failure(
+        'spawn',
+        `TradingView spawn failed: ${childError.message}`,
+        'launch_manually',
+        `Launch ${tvPath} manually with --remote-debugging-port=${cdpPort}.`,
+        { binary: tvPath, pid: child.pid },
+      );
+    }
+
+    if (childExit) {
+      const detail = `code=${childExit.code ?? 'null'}, signal=${childExit.signal ?? 'null'}`;
+      return failure(
+        'child_exit',
+        `TradingView launcher exited before CDP became ready (${detail}).`,
+        'verify_launcher_handoff',
+        `Confirm no TradingView process is still starting, then launch it with --remote-debugging-port=${cdpPort}.`,
+        { binary: tvPath, pid: child.pid },
+      );
+    }
+
+    return failure(
+      'readiness',
+      `TradingView did not expose a healthy CDP endpoint within ${overallTimeout}ms.`,
+      'check_cdp_then_retry',
+      `Check http://localhost:${cdpPort}/json/version, then retry tv_health_check or launch TradingView manually with --remote-debugging-port=${cdpPort}.`,
+      { binary: tvPath, pid: child.pid },
+    );
+  } catch (err) {
+    return failure(
+      'spawn',
+      `TradingView child lifecycle failed: ${err.message}`,
+      'launch_manually',
+      `Launch ${tvPath} manually with --remote-debugging-port=${cdpPort}.`,
+      { binary: tvPath, pid: child.pid },
+    );
+  } finally {
+    activeProbe?.controller.abort();
+    if (activeProbe?.timer) cancel(activeProbe.timer);
+    child.removeListener('error', onChildError);
+    child.removeListener('exit', onChildExit);
+  }
 }

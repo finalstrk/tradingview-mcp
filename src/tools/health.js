@@ -22,7 +22,10 @@ export function registerHealthTools(server) {
     port: z.coerce.number().optional().describe('CDP port (default 9222)'),
     kill_existing: z.coerce.boolean().optional().describe('Kill existing TradingView instances first (default true)'),
   }, async ({ port, kill_existing }) => {
-    try { return jsonResult(await core.launch({ port, kill_existing })); }
+    try {
+      const result = await core.launch({ port, kill_existing });
+      return jsonResult(result, result.success === false);
+    }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 }
