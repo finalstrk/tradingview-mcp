@@ -133,7 +133,8 @@ describe('strategy spec checker — deterministic gate', () => {
 
   it('fails closed for cost, fill, and robustness prose without measurable semantics', () => {
     const spec = strategySpecTemplate();
-    spec.execution.primary_fill_model = 'declared model';
+    spec.benchmark = 'market idea';
+    spec.execution.primary_fill_model = 'fill model';
     spec.execution.stress_fill_model = 'conservative model';
     spec.execution.commission = 'instrument-specific commission assumption';
     spec.execution.spread = 'session spread assumption';
@@ -145,6 +146,7 @@ describe('strategy spec checker — deterministic gate', () => {
     const result = checkStrategySpec(spec);
 
     for (const id of [
+      'benchmark',
       'primary_fill_model',
       'stress_fill_model',
       'commission',

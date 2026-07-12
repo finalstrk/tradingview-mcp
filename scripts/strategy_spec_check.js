@@ -79,7 +79,7 @@ function dateRange(value) {
 }
 
 function benchmark(value) {
-  return hasText(value, /(?:benchmark|baseline|buy\s*[- ]?and\s*[- ]?hold|cash|index|etf|topix|nikkei|s\s*&?\s*p|msci|market|reference|risk\s*[- ]?free)/i);
+  return hasText(value, /(?:benchmark|baseline|buy\s*[- ]?and\s*[- ]?hold|cash|index|etf|topix|nikkei|s\s*&?\s*p|msci|market\s+(?:return|index)|reference|risk\s*[- ]?free)/i);
 }
 
 function parameterFreeze(value) {
@@ -89,7 +89,7 @@ function parameterFreeze(value) {
 }
 
 function fillModel(value) {
-  return hasText(value, /(?:fill|bar\s+(?:open|close)|next[- ]?bar|market|limit|bid|ask|mid|vwap|ohlc|\b(?:open|close)\b)/i);
+  return hasText(value, /(?:bar\s+(?:open|close)|next[- ]?bar\s+(?:open|close)|market(?:\s+order)?|limit(?:\s+order)?|bid|ask|mid|vwap|ohlc|\b(?:open|close)\b)/i);
 }
 
 function stressFillModel(value) {
