@@ -102,6 +102,7 @@ human decision only
 - Missing entry, take-profit, stop-loss, position sizing, or human confirmation routes the idea to `no-action`.
 - Missing validation/risk cadence routes the idea to `research`, not `act`.
 - Missing candidate count, IS/OOS/final holdout boundaries, parameter freeze, execution-cost stress, or robustness checks also routes the idea to `research`.
+- The strategy gate rejects placeholder validation prose and requires concrete cost/fill/robustness semantics plus ordered, non-overlapping ISO date ranges; an invalid alias is skipped in favor of a later valid alias.
 - LLM refinement may propose a new hypothesis, but it must not reuse a consumed OOS/holdout period as fresh evidence.
 
 ## Strategy minimum spec gate

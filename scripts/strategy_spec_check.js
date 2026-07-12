@@ -12,10 +12,123 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 
 const HUMAN_CONFIRMATION_RE = /human|manual|confirm|approval|hitl|人間|手動|確認|承認/i;
+const PLACEHOLDER_RE = /(?:YYYY\s*[-/]\s*MM\s*[-/]\s*DD|define\b|as\s+applicable|tbd|todo|placeholder|fill\s+in|to\s+be\s+determined|your\s+(?:value|rule|condition|assumption)|example\s+(?:value|rule|condition|assumption))/i;
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_RANGE_RE = /^\s*(\d{4}-\d{2}-\d{2})\s*(?:\.\.|to)\s*(\d{4}-\d{2}-\d{2})\s*$/i;
+
+function textValues(value) {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(textValues);
+  if (value && typeof value === 'object') return Object.values(value).flatMap(textValues);
+  return [];
+}
+
+function hasConcreteValue(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0 && !PLACEHOLDER_RE.test(value);
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.some(hasConcreteValue);
+  if (typeof value === 'object') return Object.values(value).some(hasConcreteValue);
+  return false;
+}
+
+function hasText(value, pattern) {
+  return textValues(value).some(text => {
+    if (PLACEHOLDER_RE.test(text)) return false;
+    return typeof pattern === 'function' ? pattern(text) : pattern.test(text);
+  });
+}
 
 function positiveInteger(value) {
   return Number.isInteger(value) && value > 0;
 }
+
+function parseISODate(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(ISO_DATE_RE);
+  if (!match) return null;
+  const [, year, month, day] = match;
+  const date = new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  if (date.toISOString().slice(0, 10) !== `${year}-${month}-${day}`) return null;
+  return { iso: `${year}-${month}-${day}`, time: date.getTime() };
+}
+
+export function parseISODateRange(value) {
+  let start;
+  let end;
+  if (typeof value === 'string') {
+    const match = value.match(ISO_RANGE_RE);
+    if (!match) return null;
+    [, start, end] = match;
+  } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+    start = value.start ?? value.from;
+    end = value.end ?? value.to;
+  } else {
+    return null;
+  }
+  const parsedStart = parseISODate(start);
+  const parsedEnd = parseISODate(end);
+  if (!parsedStart || !parsedEnd || parsedStart.time > parsedEnd.time) return null;
+  return { start: parsedStart.iso, end: parsedEnd.iso, start_time: parsedStart.time, end_time: parsedEnd.time };
+}
+
+function dateRange(value) {
+  return parseISODateRange(value) !== null;
+}
+
+function benchmark(value) {
+  return hasText(value, /(?:benchmark|baseline|buy\s*[- ]?and\s*[- ]?hold|cash|index|etf|topix|nikkei|s\s*&?\s*p|msci|market|reference|risk\s*[- ]?free)/i);
+}
+
+function parameterFreeze(value) {
+  return hasText(value, /(?:freeze|frozen|lock(?:ed)?|fixed|no\s+(?:further\s+)?(?:parameter|rule|model)\s+(?:change|tuning|optimization))/i)
+    && hasText(value, /(?:parameter|rule|model|tuning|configuration)/i)
+    && hasText(value, /(?:before|prior\s+to|pre[- ]?holdout|holdout)/i);
+}
+
+function fillModel(value) {
+  return hasText(value, /(?:fill|bar\s+(?:open|close)|next[- ]?bar|market|limit|bid|ask|mid|vwap|ohlc|\b(?:open|close)\b)/i);
+}
+
+function stressFillModel(value) {
+  return fillModel(value) && hasText(value, /(?:stress|conservative|adverse|delay(?:ed)?|worse|worst|one[- ]?bar)/i);
+}
+
+const COST_UNIT_RE = /(?:%|bps?|basis\s+points?|ticks?|pips?|points?|(?:usd|jpy|eur|gbp|cents?)\b|per\s+(?:share|contract|unit|order|side|trade)|price\s+units?)/i;
+const NUMBER_RE = /(?:\d+(?:\.\d+)?|zero|none|free)/i;
+
+function costAssumption(value) {
+  return hasText(value, text => NUMBER_RE.test(text) && COST_UNIT_RE.test(text));
+}
+
+function topTradeRemoval(value) {
+  return hasText(value, /(?:remove|removal|exclude|drop|without|recompute)/i)
+    && hasText(value, /(?:top|largest|winner|winning\s+trade|best\s+trade)/i)
+    && hasText(value, /(?:trade|win|winner|\d+\s*%)/i);
+}
+
+function regimeSplits(value) {
+  const text = textValues(value).filter(text => !PLACEHOLDER_RE.test(text)).join(' ');
+  if (!text) return false;
+  const concepts = text.match(/(?:trend|range|volatility|risk\s*[- ]?on|risk\s*[- ]?off|bull|bear|session|high|low|breakout|mean\s*reversion)/gi) || [];
+  return concepts.length >= 2 && /(?:split|regime|\/|versus|\bvs\.?\b|high\s*[-/]\s*low|risk\s*[- ]?on\s*[-/]\s*risk\s*[- ]?off)/i.test(text);
+}
+
+function longShortDecomposition(value) {
+  const text = textValues(value).filter(text => !PLACEHOLDER_RE.test(text)).join(' ');
+  if (!text) return false;
+  const hasLong = /\blong\b/i.test(text);
+  const hasShort = /\bshort\b/i.test(text);
+  const hasPlan = /(?:separate|decompos|report|metric|split|n\/a|not\s+applicable|reason|long\s*[- ]?only)/i.test(text);
+  return hasLong && (hasShort || /long\s*[- ]?only/i.test(text)) && hasPlan;
+}
+
+function paperTradePeriod(value) {
+  return dateRange(value) || hasText(value, /\d+(?:\.\d+)?\s*(?:day|week|month|year)s?/i);
+}
+
 
 export const REQUIRED_REQUIREMENTS = [
   {
@@ -96,12 +209,14 @@ export const REQUIRED_REQUIREMENTS = [
     label: 'backtest period',
     paths: [['backtest_period'], ['validation', 'backtest_period'], ['backtest', 'period']],
     category: 'validation',
+    predicate: dateRange,
   },
   {
     id: 'benchmark',
     label: 'pre-declared benchmark',
     paths: [['benchmark'], ['validation', 'benchmark'], ['backtest', 'benchmark']],
     category: 'validation',
+    predicate: benchmark,
   },
   {
     id: 'candidate_count',
@@ -115,78 +230,91 @@ export const REQUIRED_REQUIREMENTS = [
     label: 'in-sample period',
     paths: [['in_sample_period'], ['validation', 'in_sample_period'], ['validation', 'is_period']],
     category: 'overfit_guard',
+    predicate: dateRange,
   },
   {
     id: 'out_of_sample_period',
     label: 'out-of-sample period',
     paths: [['out_of_sample_period'], ['validation', 'out_of_sample_period'], ['validation', 'oos_period']],
     category: 'overfit_guard',
+    predicate: dateRange,
   },
   {
     id: 'holdout_period',
     label: 'untouched final holdout period',
     paths: [['holdout_period'], ['validation', 'holdout_period']],
     category: 'overfit_guard',
+    predicate: dateRange,
   },
   {
     id: 'parameter_freeze',
     label: 'parameter-freeze rule before holdout',
     paths: [['parameter_freeze'], ['validation', 'parameter_freeze'], ['validation', 'freeze_rule']],
     category: 'overfit_guard',
+    predicate: parameterFreeze,
   },
   {
     id: 'primary_fill_model',
     label: 'primary fill model',
     paths: [['primary_fill_model'], ['execution', 'primary_fill_model'], ['execution', 'primary_fill']],
     category: 'execution',
+    predicate: fillModel,
   },
   {
     id: 'stress_fill_model',
     label: 'conservative stress fill model',
     paths: [['stress_fill_model'], ['execution', 'stress_fill_model'], ['execution', 'stress_fill']],
     category: 'execution',
+    predicate: stressFillModel,
   },
   {
     id: 'commission',
     label: 'commission assumption',
     paths: [['commission'], ['execution', 'commission'], ['costs', 'commission']],
     category: 'execution',
+    predicate: costAssumption,
   },
   {
     id: 'spread',
     label: 'spread assumption',
     paths: [['spread'], ['execution', 'spread'], ['costs', 'spread']],
     category: 'execution',
+    predicate: costAssumption,
   },
   {
     id: 'slippage',
     label: 'slippage assumption',
     paths: [['slippage'], ['execution', 'slippage'], ['costs', 'slippage']],
     category: 'execution',
+    predicate: costAssumption,
   },
   {
     id: 'top_trade_removal',
     label: 'top 1% / 5% trade-removal check',
     paths: [['top_trade_removal'], ['robustness', 'top_trade_removal']],
     category: 'robustness',
+    predicate: topTradeRemoval,
   },
   {
     id: 'regime_splits',
     label: 'regime-split plan',
     paths: [['regime_splits'], ['robustness', 'regime_splits']],
     category: 'robustness',
+    predicate: regimeSplits,
   },
   {
     id: 'long_short_decomposition',
     label: 'long / short decomposition',
     paths: [['long_short_decomposition'], ['robustness', 'long_short_decomposition']],
     category: 'robustness',
+    predicate: longShortDecomposition,
   },
   {
     id: 'paper_trade_period',
     label: 'paper-trade period',
     paths: [['paper_trade'], ['paper_trade_period'], ['validation', 'paper_trade_period']],
     category: 'validation',
+    predicate: paperTradePeriod,
   },
   {
     id: 'kill_switch',
@@ -222,9 +350,9 @@ export function strategySpecTemplate() {
     market: 'stocks_jp',
     timeframe: 'D',
     data_source: 'TradingView OHLCV + official IR/news verification',
-    entry: ['Define the exact indicator/price/volume conditions here.'],
-    exit_take_profit: ['Define target, R multiple, or invalidation of upside thesis.'],
-    exit_stop_loss: ['Define stop level and whether it is close-based or intraday.'],
+    entry: ['Illustrative only: enter long when the 20-day SMA crosses above the 50-day SMA on a daily close and volume is at least its 20-day average.'],
+    exit_take_profit: ['Illustrative only: take profit at +2R or when the 20-day SMA closes back below the 50-day SMA.'],
+    exit_stop_loss: ['Illustrative only: exit at a close below the entry minus 1 ATR(14); no intraday stop is assumed.'],
     position_size: 'Risk at most 0.5% of equity per trade.',
     risk: {
       max_risk_per_trade: '0.5% equity',
@@ -232,28 +360,28 @@ export function strategySpecTemplate() {
       max_concurrent_positions: 3,
       kill_switch: ['API/data failure', 'rule drift', 'manual override required'],
     },
-    backtest_period: 'YYYY-MM-DD..YYYY-MM-DD, out-of-sample and final holdout included',
-    benchmark: ['buy-and-hold or cash, as applicable', 'simple MA or breakout baseline'],
+    backtest_period: '2018-01-01..2025-12-31',
+    benchmark: ['TOPIX total-return buy-and-hold over the same dates', 'cash at 0% annual return'],
     validation: {
       candidate_count: 1,
-      in_sample_period: 'YYYY-MM-DD..YYYY-MM-DD',
-      out_of_sample_period: 'YYYY-MM-DD..YYYY-MM-DD',
-      holdout_period: 'YYYY-MM-DD..YYYY-MM-DD; never used for LLM/parameter refinement',
-      parameter_freeze: 'Freeze rules and parameters before opening the final holdout.',
+      in_sample_period: '2018-01-01..2021-12-31',
+      out_of_sample_period: '2022-01-01..2023-12-31',
+      holdout_period: '2024-01-01..2025-12-31',
+      parameter_freeze: 'Illustrative only: freeze rules and parameters before opening the final holdout; no holdout-driven retuning.',
     },
     execution: {
-      primary_fill_model: 'Current declared model, e.g. bar close or next bar open.',
-      stress_fill_model: 'Next-bar-open or one-bar-delayed fill, whichever is more conservative.',
-      commission: 'Instrument-specific per-side commission, with a higher-cost stress case.',
-      spread: 'Instrument/session-specific spread assumption and stress multiple.',
-      slippage: 'Instrument-specific ticks/bps plus adverse stress case.',
+      primary_fill_model: 'Illustrative only: fill at the next daily bar open after a signal close.',
+      stress_fill_model: 'Illustrative only: conservative one-bar-delayed fill at the following bar open.',
+      commission: 'Illustrative only: 0.05% per side primary and 0.10% per side stress.',
+      spread: 'Illustrative only: 2 bps primary and 5 bps adverse stress.',
+      slippage: 'Illustrative only: 1 tick primary and 3 ticks adverse stress.',
     },
     robustness: {
-      top_trade_removal: 'Recompute after removing the largest win and top 1% / 5% winners.',
+      top_trade_removal: 'Illustrative only: recompute after removing the largest win and the top 1% and 5% winning trades.',
       regime_splits: ['trend/range', 'high/low volatility', 'risk-on/risk-off'],
-      long_short_decomposition: 'Report long and short metrics separately; use n/a with reason for long-only systems.',
+      long_short_decomposition: 'Illustrative only: report long and short metrics separately; use n/a with a documented reason for long-only systems.',
     },
-    paper_trade_period: 'At least 1-3 months before any small-live discussion',
+    paper_trade_period: '2026-01-01..2026-03-31',
     review_cadence: 'weekly paper review; monthly parameter review',
     edge_death_condition: ['PF < 1.0 OOS', 'live/paper gap persists', 'regime mismatch'],
     human_confirmation: {
@@ -282,10 +410,15 @@ function meaningful(value) {
   return false;
 }
 
+function requirementValueValid(value, requirement) {
+  if (!meaningful(value) || !hasConcreteValue(value)) return false;
+  return requirement.predicate ? requirement.predicate(value) : true;
+}
+
 function firstMatchingValue(spec, requirement) {
   for (const p of requirement.paths) {
     const value = valueAt(spec, p);
-    if (meaningful(value)) return { path: p.join('.'), value };
+    if (requirementValueValid(value, requirement)) return { path: p.join('.'), value };
   }
   return { path: null, value: undefined };
 }
@@ -305,10 +438,27 @@ function strategyId(spec, index) {
   return String(spec?.id || spec?.setup || spec?.name || `strategy_${index + 1}`);
 }
 
+function validationPeriod(spec, id) {
+  const requirement = REQUIRED_REQUIREMENTS.find(req => req.id === id);
+  const found = requirement ? firstMatchingValue(spec, requirement) : { path: null, value: undefined };
+  return found.path ? parseISODateRange(found.value) : null;
+}
+
+function orderedValidationPeriods(spec) {
+  const periods = ['in_sample_period', 'out_of_sample_period', 'holdout_period']
+    .map(id => validationPeriod(spec, id));
+  if (periods.some(period => !period)) return false;
+  for (let i = 1; i < periods.length; i += 1) {
+    // Ranges are inclusive. The next period must start after the prior end.
+    if (periods[i].start_time <= periods[i - 1].end_time) return false;
+  }
+  return true;
+}
+
 export function checkStrategySpec(spec, index = 0) {
   const checks = REQUIRED_REQUIREMENTS.map(req => {
     const found = firstMatchingValue(spec, req);
-    const ok = found.path !== null && (req.predicate ? req.predicate(found.value) : true);
+    const ok = found.path !== null;
     return {
       id: req.id,
       label: req.label,
@@ -318,6 +468,13 @@ export function checkStrategySpec(spec, index = 0) {
       path: found.path,
     };
   });
+
+  const periodsOrdered = orderedValidationPeriods(spec);
+  if (!periodsOrdered) {
+    for (const check of checks) {
+      if (['in_sample_period', 'out_of_sample_period', 'holdout_period'].includes(check.id)) check.ok = false;
+    }
+  }
 
   const missing = checks.filter(c => !c.ok);
   const criticalMissing = missing.filter(c => c.critical);
@@ -334,6 +491,9 @@ export function checkStrategySpec(spec, index = 0) {
     missing: missing.map(c => c.id),
     critical_missing: criticalMissing.map(c => c.id),
     checks,
+    validation: {
+      periods_ordered_non_overlapping: periodsOrdered,
+    },
   };
 }
 

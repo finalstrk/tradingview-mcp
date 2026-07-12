@@ -59,6 +59,15 @@ A strategy candidate needs all of the following before it can even be a paper/re
 
 Critical missing fields route to `no-action`. Non-critical validation gaps route to `research`. A complete spec routes to `watch` / paper-candidate only — never live execution.
 
+The gate is fail-closed for the validation fields that most often create false
+confidence. `benchmark`, parameter freeze, primary/stress fills, commission,
+spread, slippage, and robustness fields must contain concrete semantic evidence;
+placeholder prose such as `YYYY-MM-DD`, `Define ...`, `TBD`, or `as applicable`
+is missing. IS, OOS, and final holdout values must be explicit ISO ranges in the
+form `YYYY-MM-DD..YYYY-MM-DD`, ordered in that sequence, and non-overlapping.
+When several aliases are present, the checker evaluates each alias until it
+finds a valid one; an invalid first alias does not mask a valid later alias.
+
 ## Usage
 
 Print a starter JSON template:
@@ -99,9 +108,9 @@ npm run strategy-spec-check -- path/to/spec.json --strict
   "market": "stocks_jp",
   "timeframe": "D",
   "data_source": "TradingView OHLCV + official IR/news verification",
-  "entry": ["Define exact indicator/price/volume conditions."],
-  "exit_take_profit": ["Define target or R multiple."],
-  "exit_stop_loss": ["Define stop level and trigger semantics."],
+  "entry": ["Illustrative only: enter long when the 20-day SMA crosses above the 50-day SMA on a daily close."],
+  "exit_take_profit": ["Illustrative only: take profit at +2R or on a 20-day SMA close below."],
+  "exit_stop_loss": ["Illustrative only: exit at a close below entry minus 1 ATR(14)."],
   "position_size": "Risk at most 0.5% of equity per trade.",
   "risk": {
     "max_risk_per_trade": "0.5% equity",
@@ -109,28 +118,28 @@ npm run strategy-spec-check -- path/to/spec.json --strict
     "max_concurrent_positions": 3,
     "kill_switch": ["API/data failure", "rule drift", "manual override"]
   },
-  "backtest_period": "YYYY-MM-DD..YYYY-MM-DD, OOS and final holdout included",
-  "benchmark": ["buy-and-hold or cash", "simple MA or breakout"],
+  "backtest_period": "2018-01-01..2025-12-31",
+  "benchmark": ["TOPIX total-return buy-and-hold over the same dates", "cash at 0% annual return"],
   "validation": {
     "candidate_count": 1,
-    "in_sample_period": "YYYY-MM-DD..YYYY-MM-DD",
-    "out_of_sample_period": "YYYY-MM-DD..YYYY-MM-DD",
-    "holdout_period": "YYYY-MM-DD..YYYY-MM-DD; untouched by refinement",
-    "parameter_freeze": "Freeze rules and parameters before opening holdout."
+    "in_sample_period": "2018-01-01..2021-12-31",
+    "out_of_sample_period": "2022-01-01..2023-12-31",
+    "holdout_period": "2024-01-01..2025-12-31",
+    "parameter_freeze": "Illustrative only: freeze rules and parameters before opening the final holdout; no holdout-driven retuning."
   },
   "execution": {
-    "primary_fill_model": "Declared production-like fill assumption",
-    "stress_fill_model": "Next-bar-open or one-bar-delayed fill",
-    "commission": "Per-side instrument-specific cost plus stress case",
-    "spread": "Instrument/session assumption plus stress multiple",
-    "slippage": "Ticks/bps assumption plus adverse stress case"
+    "primary_fill_model": "Illustrative only: fill at the next daily bar open after a signal close",
+    "stress_fill_model": "Illustrative only: conservative one-bar-delayed fill at the following bar open",
+    "commission": "Illustrative only: 0.05% per side primary and 0.10% per side stress",
+    "spread": "Illustrative only: 2 bps primary and 5 bps adverse stress",
+    "slippage": "Illustrative only: 1 tick primary and 3 ticks adverse stress"
   },
   "robustness": {
-    "top_trade_removal": "Remove largest win and top 1% / 5% winners",
+    "top_trade_removal": "Illustrative only: recompute after removing the largest win and top 1% and 5% winning trades",
     "regime_splits": ["trend/range", "high/low volatility", "risk-on/risk-off"],
-    "long_short_decomposition": "Report separately or n/a with reason"
+    "long_short_decomposition": "Illustrative only: report long and short metrics separately; use n/a with a documented reason for long-only systems"
   },
-  "paper_trade_period": "At least 1-3 months",
+  "paper_trade_period": "2026-01-01..2026-03-31",
   "review_cadence": "weekly paper review; monthly parameter review",
   "edge_death_condition": ["PF < 1.0 OOS", "live/paper gap persists"],
   "human_confirmation": {
@@ -139,6 +148,12 @@ npm run strategy-spec-check -- path/to/spec.json --strict
   }
 }
 ```
+
+The values printed by `--template` are deliberately **illustrative examples**
+for exercising the validator. They are not observed backtest results, a claim
+that the strategy has an edge, or permission to trade. Replace every
+illustrative value with measured, source-backed values before using a spec in a
+paper review.
 
 ## AI-assisted refinement rule
 
