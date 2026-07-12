@@ -135,9 +135,15 @@ describe('test manifest — classification', () => {
     assert.deepEqual(violations, []);
   });
 
-  it('keeps all five Pine facade integration cases in an explicit live file', () => {
+  it('keeps all five Pine facade cases as fixed dispatches in an explicit live file', () => {
     assert.ok(LIVE_TESTS.includes(PINE_FACADE_E2E), `${PINE_FACADE_E2E} must be classified as live`);
-    assert.equal(remoteIntegrationCases(PINE_FACADE_E2E).length, 5);
+    const source = readFileSync(join(ROOT, PINE_FACADE_E2E), 'utf8');
+    const caseIds = [...source.matchAll(/\.dispatch\(['"](pine_facade_[1-5])['"]\)/g)]
+      .map(match => match[1]);
+    assert.deepEqual(caseIds, [
+      'pine_facade_1', 'pine_facade_2', 'pine_facade_3', 'pine_facade_4', 'pine_facade_5',
+    ]);
+    assert.deepEqual(remoteIntegrationCases(PINE_FACADE_E2E), []);
   });
 });
 
