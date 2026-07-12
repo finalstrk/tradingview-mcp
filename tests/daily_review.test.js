@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildMarkdownReport, summarizeRegistry } from '../scripts/daily_review.js';
+import { buildMarkdownReport, runDailyReview, summarizeRegistry } from '../scripts/daily_review.js';
 
 describe('daily review — registry summary', () => {
   it('counts setup x market statuses', () => {
@@ -74,5 +74,24 @@ describe('daily review — markdown report', () => {
     assert.match(markdown, /DT\|nr_squeeze\|long\|forming/);
     assert.match(markdown, /interpretation: watch/);
     assert.doesNotMatch(markdown, /実弾発注/);
+  });
+
+  it('disconnects the shared CDP client after writing a bounded report', async () => {
+    const writes = [];
+    let disconnectCalls = 0;
+    const payload = {
+      generated_at: '2026-07-07T01:23:45.000Z',
+      mode: 'read-only',
+      cdp: { ok: false, error: 'offline fixture' },
+    };
+
+    await runDailyReview({ json: true, out: null }, {
+      collectDailyReview: async () => payload,
+      disconnect: async () => { disconnectCalls += 1; },
+      stdout: { write: value => writes.push(value) },
+    });
+
+    assert.equal(disconnectCalls, 1);
+    assert.deepEqual(JSON.parse(writes.join('')), payload);
   });
 });

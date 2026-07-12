@@ -139,5 +139,6 @@ node scripts/daily_review.js --json
 
 - Start with manual runs for at least two weeks.
 - Only after reports are useful and low-noise should this become cron/Slack/Discord delivery.
+- Each bounded CLI/cron run disconnects its CDP client after writing the report so the process can exit cleanly.
 - Paper-only strategy proposals are a later phase.
 - Live brokerage integration is a separate decision and remains out of scope for this repo phase.

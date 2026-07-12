@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { disconnect } from '../src/connection.js';
 import { healthCheck } from '../src/core/health.js';
 import { getState } from '../src/core/chart.js';
 import {
@@ -321,6 +322,33 @@ export async function collectDailyReview(options = {}) {
   return payload;
 }
 
+export async function runDailyReview(options, dependencies = {}) {
+  const collectReview = dependencies.collectDailyReview || collectDailyReview;
+  const disconnectClient = dependencies.disconnect || disconnect;
+  const writeOutput = dependencies.writeFile || writeFile;
+  const stdout = dependencies.stdout || process.stdout;
+  const cwd = dependencies.cwd || process.cwd();
+
+  try {
+    const payload = await collectReview(options);
+    const output = options.json
+      ? `${JSON.stringify(payload, null, 2)}\n`
+      : `${buildMarkdownReport(payload)}\n`;
+
+    if (options.out) {
+      const outPath = path.resolve(cwd, options.out);
+      await writeOutput(outPath, output, 'utf8');
+      stdout.write(`${outPath}\n`);
+    } else {
+      stdout.write(output);
+    }
+  } finally {
+    // Bounded report scripts must release the shared CDP WebSocket so cron and
+    // shell invocations terminate naturally after producing their output.
+    await disconnectClient();
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   if (options.help) {
@@ -328,18 +356,7 @@ async function main() {
     return;
   }
 
-  const payload = await collectDailyReview(options);
-  const output = options.json
-    ? `${JSON.stringify(payload, null, 2)}\n`
-    : `${buildMarkdownReport(payload)}\n`;
-
-  if (options.out) {
-    const outPath = path.resolve(process.cwd(), options.out);
-    await writeFile(outPath, output, 'utf8');
-    process.stdout.write(`${outPath}\n`);
-  } else {
-    process.stdout.write(output);
-  }
+  await runDailyReview(options);
 }
 
 if (path.resolve(process.argv[1] || '') === __filename) {
