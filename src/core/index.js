@@ -5,6 +5,7 @@
 export * as chart from './chart.js';
 export * as data from './data.js';
 export * as pine from './pine.js';
+export { discoverOpenPineEditorReadOnly } from './pine_read_only_boundary.js';
 export * as health from './health.js';
 export * as capture from './capture.js';
 export * as drawing from './drawing.js';
