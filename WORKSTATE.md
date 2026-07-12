@@ -13,9 +13,8 @@ Last updated: 2026-07-12
 
 ### Audit / hardening stream (2026-07-12)
 
-- Branch `codex/tradingview-audit-hardening` contains six hardening intent
-  commits from the 2026-07-08 baseline and is synchronized with `fork` at
-  `30a16225931525e74a85db8a741e1f511e8c6841`.
+- Branch `codex/tradingview-audit-hardening` contains the hardening intent
+  commits from the 2026-07-08 baseline and is synchronized with `fork`.
 - P1-01 through P1-06 operational hardening is committed in separate intent
   groups. The remaining baseline raw CDP calls are P2 notes outside the
   accepted P1 paths.
