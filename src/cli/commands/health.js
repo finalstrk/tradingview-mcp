@@ -10,7 +10,7 @@ register('launch', {
   description: 'Launch TradingView with CDP enabled',
   options: {
     port: { type: 'string', short: 'p', description: 'CDP port (default 9222)' },
-    'no-kill': { type: 'boolean', description: 'Do not kill existing instances' },
+    'no-kill': { type: 'boolean', description: 'Skip killing existing instances during the new-launch preflight; healthy CDP endpoints are always reused.' },
   },
   handler: async (opts) => {
     const result = await core.launch({

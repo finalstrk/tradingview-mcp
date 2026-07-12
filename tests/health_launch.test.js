@@ -358,6 +358,34 @@ describe('health launch — failure-safe lifecycle', () => {
 });
 
 describe('health launch — MCP response', () => {
+  it('documents reuse-first behavior and limits kill_existing to new-launch preflight', () => {
+    let launchSchema;
+    registerHealthTools({
+      tool(name, _description, schema) {
+        if (name === 'tv_launch') launchSchema = schema;
+      },
+    });
+
+    assert.ok(launchSchema?.kill_existing, 'tv_launch must register kill_existing');
+    assert.match(
+      launchSchema.kill_existing.description,
+      /healthy CDP endpoint.*always reused/i,
+    );
+    assert.match(
+      launchSchema.kill_existing.description,
+      /only before a new launch when no healthy CDP endpoint is available/i,
+    );
+
+    const help = spawnSync(process.execPath, [CLI, 'launch', '--help'], {
+      encoding: 'utf8',
+    });
+    assert.equal(help.error, undefined);
+    assert.equal(help.status, 0);
+    assert.equal(help.stderr, '');
+    assert.match(help.stdout, /healthy CDP endpoint.*always reused/i);
+    assert.match(help.stdout, /new-launch preflight/i);
+  });
+
   it('marks a structured launch failure as an MCP error result', async () => {
     let launchHandler;
     registerHealthTools({
