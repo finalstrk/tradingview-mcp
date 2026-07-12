@@ -69,6 +69,52 @@ describe('stream termination', () => {
     assert.equal(processDouble.listenerCount('SIGINT'), 0);
     assert.equal(processDouble.listenerCount('SIGTERM'), 0);
   });
+
+  it('returns to the loop after a fetch timeout and still stops on the external signal', async () => {
+    const processDouble = createProcessDouble();
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    let abortListeners = 0;
+    signal.addEventListener = (type, listener, options) => {
+      if (type === 'abort') abortListeners += 1;
+      return add(type, listener, options);
+    };
+    signal.removeEventListener = (type, listener, options) => {
+      if (type === 'abort') abortListeners -= 1;
+      return remove(type, listener, options);
+    };
+    let calls = 0;
+    const pending = pollLoop(
+      () => {
+        calls += 1;
+        return new Promise(() => {});
+      },
+      {
+        interval: 1,
+        fetchTimeoutMs: 20,
+        label: 'timeout',
+        signal,
+        processRef: processDouble,
+      },
+    );
+
+    await settleWithin(
+      (async () => {
+        while (calls < 2) await new Promise(resolve => setImmediate(resolve));
+      })(),
+      250,
+      'stream did not return to the loop after fetch timeout',
+    );
+    assert.ok(calls >= 2);
+
+    controller.abort(new Error('stop after timeout'));
+    await settleWithin(pending, 100, 'stream termination after fetch timeout timed out');
+    assert.equal(abortListeners, 0);
+    assert.equal(processDouble.listenerCount('SIGINT'), 0);
+    assert.equal(processDouble.listenerCount('SIGTERM'), 0);
+  });
 });
 
 describe('Pine cancellation propagation', () => {

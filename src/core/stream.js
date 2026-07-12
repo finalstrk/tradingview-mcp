@@ -48,7 +48,7 @@ export async function pollLoop(fetcher, {
           signal: controller.signal,
           timeoutMs: fetchTimeoutMs,
         }));
-        const data = await raceWithAbort(fetchPromise, controller.signal, label);
+        const data = await raceWithAbort(fetchPromise, controller.signal, label, fetchTimeoutMs);
         if (!data) {
           await sleep(interval, controller.signal);
           continue;
@@ -79,18 +79,25 @@ export async function pollLoop(fetcher, {
   }
 }
 
-function raceWithAbort(promise, signal, label) {
+function raceWithAbort(promise, signal, label, timeoutMs) {
   if (signal.aborted) return Promise.reject(signal.reason || new Error(`stream:${label} stopped`));
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timer;
     const finish = (callback, value) => {
       if (settled) return;
       settled = true;
+      if (timer !== undefined) clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
       callback(value);
     };
     const onAbort = () => finish(reject, signal.reason || new Error(`stream:${label} stopped`));
     signal.addEventListener('abort', onAbort, { once: true });
+    const boundedTimeout = Math.max(1, Number(timeoutMs) || 1);
+    timer = setTimeout(
+      () => finish(reject, new Error(`stream:${label} fetch timed out after ${boundedTimeout}ms`)),
+      boundedTimeout,
+    );
     Promise.resolve(promise).then(
       value => finish(resolve, value),
       error => finish(reject, error),
