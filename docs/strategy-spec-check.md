@@ -46,16 +46,20 @@ A strategy candidate needs all of the following before it can even be a paper/re
 12. `backtest_period`
 13. pre-declared `benchmark`
 14. `validation.candidate_count`
-15. explicit IS / OOS / untouched final holdout periods
-16. a parameter-freeze rule before opening the holdout
-17. primary and conservative stress fill models
-18. commission / spread / slippage assumptions
-19. top-trade removal, regime splits, and long/short decomposition
-20. `paper_trade_period`
-21. `risk.kill_switch`
-22. `review_cadence`
-23. `edge_death_condition`
-24. `human_confirmation`
+15. failed/negative variant retention in `validation.negative_result_log`
+16. diagnosis before refinement through `validation.diagnostic_test`
+17. point-in-time universe membership and data-availability lag
+18. explicit IS / OOS / untouched final holdout periods
+19. a parameter-freeze rule before opening the holdout
+20. primary and conservative stress fill models
+21. commission / spread / slippage assumptions
+22. explicit leverage and funding assumptions
+23. top-trade removal, regime splits, long/short decomposition, and concentration checks
+24. `paper_trade_period`
+25. `risk.kill_switch`
+26. `review_cadence`
+27. `edge_death_condition`
+28. `human_confirmation`
 
 Critical missing fields route to `no-action`. Non-critical validation gaps route to `research`. A complete spec routes to `watch` / paper-candidate only — never live execution.
 
@@ -67,6 +71,13 @@ is missing. IS, OOS, and final holdout values must be explicit ISO ranges in the
 form `YYYY-MM-DD..YYYY-MM-DD`, ordered in that sequence, and non-overlapping.
 When several aliases are present, the checker evaluates each alias until it
 finds a valid one; an invalid first alias does not mask a valid later alias.
+The evidence controls are also semantic: failed variants must retain parameters
+and metrics/results per variant; diagnosis tests must record an observed result;
+point-in-time data must pair universe/delist/survivorship controls with a
+positive publication/availability lag (or a documented single-asset exception);
+leverage and funding require explicit numeric/zero/none values; and
+concentration checks require a measured target plus a metric, threshold, cap, or
+percentage.
 
 ## Usage
 
@@ -122,6 +133,9 @@ npm run strategy-spec-check -- path/to/spec.json --strict
   "benchmark": ["TOPIX total-return buy-and-hold over the same dates", "cash at 0% annual return"],
   "validation": {
     "candidate_count": 1,
+    "negative_result_log": "Preserve every failed, losing, rejected, and underperforming variant with parameters and metrics.",
+    "diagnostic_test": "Record a counter-thesis before refinement, then run one one-variable inversion or ablation test and report the result.",
+    "point_in_time_data": "Use historical point-in-time universe membership including delistings and publication lag at the decision timestamp.",
     "in_sample_period": "2018-01-01..2021-12-31",
     "out_of_sample_period": "2022-01-01..2023-12-31",
     "holdout_period": "2024-01-01..2025-12-31",
@@ -132,12 +146,14 @@ npm run strategy-spec-check -- path/to/spec.json --strict
     "stress_fill_model": "Illustrative only: conservative one-bar-delayed fill at the following bar open",
     "commission": "Illustrative only: 0.05% per side primary and 0.10% per side stress",
     "spread": "Illustrative only: 2 bps primary and 5 bps adverse stress",
-    "slippage": "Illustrative only: 1 tick primary and 3 ticks adverse stress"
+    "slippage": "Illustrative only: 1 tick primary and 3 ticks adverse stress",
+    "leverage_funding": "Illustrative only: 1x gross leverage and funding 0 bps for cash equities; derivatives use observed funding plus stress"
   },
   "robustness": {
     "top_trade_removal": "Illustrative only: recompute after removing the largest win and top 1% and 5% winning trades",
     "regime_splits": ["trend/range", "high/low volatility", "risk-on/risk-off"],
-    "long_short_decomposition": "Illustrative only: report long and short metrics separately; use n/a with a documented reason for long-only systems"
+    "long_short_decomposition": "Illustrative only: report long and short metrics separately; use n/a with a documented reason for long-only systems",
+    "concentration_check": "Illustrative only: report top 1/3/5 name PnL contribution and sector exposure with a pre-holdout limit"
   },
   "paper_trade_period": "2026-01-01..2026-03-31",
   "review_cadence": "weekly paper review; monthly parameter review",
@@ -162,6 +178,10 @@ paper review.
 - Once OOS or holdout output has influenced a rule change, that period is consumed and cannot be called untouched OOS/holdout again.
 - Exporting a TradingView CSV and repeatedly asking an LLM to improve the same history is optimization, not independent validation.
 - A dollar P&L headline is never promotion evidence by itself. Preserve return, drawdown, trade count, benchmark gap, cost assumptions, and top-trade dependence.
+- Preserve failed versions. A negative result is evidence; hiding V1 after V2 succeeds destroys the research trail.
+- Diagnose before optimizing. Inversion, leg removal, and factor ablation are counterfactual tests, but any profitable variant they reveal is a new candidate and consumes candidate-count/OOS budget.
+- For cross-sectional factors, require historical point-in-time universe membership, delistings, publication lags, and decision timestamps. A current mega-cap basket replayed backward is not a survivorship-safe universe.
+- Display concentration next to return and drawdown. Report whether a handful of names or one market regime explains the result.
 
 ## Relationship to daily review
 
