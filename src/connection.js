@@ -91,6 +91,22 @@ export class CdpAbortError extends CdpOperationError {
   }
 }
 
+export class CdpTransportError extends CdpOperationError {
+  constructor(operation, timeoutMs, cause) {
+    super(`${operation} failed due to a CDP transport error`, {
+      code: 'CDP_TRANSPORT_ERROR',
+      operation,
+      timeoutMs,
+      cause,
+    });
+  }
+}
+
+function normalizeTransportError(error, context) {
+  if (error instanceof CdpOperationError) return error;
+  return new CdpTransportError(context.operationName, context.timeoutMs, error);
+}
+
 class StaleConnectionError extends Error {}
 
 function normalizeTimeout(options, defaultTimeoutMs, maxTimeoutMs) {
@@ -439,6 +455,7 @@ export function createConnectionManager({
     } catch (error) {
       if (!(error instanceof CdpOperationError)) {
         void invalidate(candidate, candidateGeneration);
+        throw normalizeTransportError(error, context);
       }
       throw error;
     }
@@ -471,6 +488,7 @@ export function createConnectionManager({
     } catch (error) {
       if (!(error instanceof CdpOperationError)) {
         void invalidate(candidate, candidateGeneration);
+        throw normalizeTransportError(error, context);
       }
       throw error;
     }
@@ -502,7 +520,7 @@ export function createConnectionManager({
       return true;
     } catch (error) {
       void invalidate(candidate, candidateGeneration);
-      throw error;
+      throw normalizeTransportError(error, context);
     }
   };
 

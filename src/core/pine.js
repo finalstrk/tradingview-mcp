@@ -3,7 +3,12 @@
  * All functions accept plain options objects and return plain JS objects.
  * They throw on error (callers catch and format).
  */
-import { evaluate, evaluateAsync, sendCdpCommand } from '../connection.js';
+import {
+  CdpAbortError,
+  evaluate,
+  evaluateAsync,
+  sendCdpCommand,
+} from '../connection.js';
 
 // ── Monaco finder (injected into TV page) ──
 const FIND_MONACO = `
@@ -109,15 +114,15 @@ export async function ensurePineEditorOpen({ signal, timeoutMs, deadline } = {})
   `, evaluateOptions);
 
   for (let i = 0; i < 50; i++) {
-    await abortableDelay(200, signal);
+    await abortableDelay(200, signal, 'Pine.ensurePineEditorOpen.wait');
     const ready = await evaluate(`(function() { return ${FIND_MONACO} !== null; })()`, evaluateOptions);
     if (ready) return true;
   }
   return false;
 }
 
-function abortableDelay(ms, signal) {
-  if (signal?.aborted) return Promise.reject(signal.reason || new Error('Pine operation aborted'));
+function abortableDelay(ms, signal, operationName = 'Pine.wait') {
+  if (signal?.aborted) return Promise.reject(new CdpAbortError(operationName, signal.reason));
   return new Promise((resolve, reject) => {
     let timer;
     const cleanup = () => {
@@ -126,7 +131,7 @@ function abortableDelay(ms, signal) {
     };
     const onAbort = () => {
       cleanup();
-      reject(signal.reason || new Error('Pine operation aborted'));
+      reject(new CdpAbortError(operationName, signal.reason));
     };
     signal?.addEventListener('abort', onAbort, { once: true });
     timer = setTimeout(() => {
@@ -388,7 +393,7 @@ export async function compile({ signal, timeoutMs, deadline } = {}) {
     );
   }
 
-  await abortableDelay(2000, signal);
+  await abortableDelay(2000, signal, 'Pine.compile.wait');
   return { success: true, button_clicked: clicked || 'keyboard_shortcut', source: 'dom_fallback' };
 }
 
@@ -434,7 +439,7 @@ export async function save({ signal, timeoutMs, deadline } = {}) {
     { type: 'keyUp', key: 's', code: 'KeyS' },
     commandOptions,
   );
-  await abortableDelay(800, signal);
+  await abortableDelay(800, signal, 'Pine.save.wait');
 
   // Handle "Save Script" name dialog that appears for new/unsaved scripts
   const dialogHandled = await evaluate(`
@@ -454,7 +459,7 @@ export async function save({ signal, timeoutMs, deadline } = {}) {
     })()
   `, commandOptions);
 
-  if (dialogHandled) await abortableDelay(500, signal);
+  if (dialogHandled) await abortableDelay(500, signal, 'Pine.save.dialog.wait');
 
   return { success: true, action: dialogHandled ? 'saved_with_dialog' : 'Ctrl+S_dispatched' };
 }
@@ -562,7 +567,7 @@ export async function smartCompile({ signal, timeoutMs, deadline } = {}) {
     );
   }
 
-  await abortableDelay(2500, signal);
+  await abortableDelay(2500, signal, 'Pine.smartCompile.wait');
 
   const errors = await evaluate(`
     (function() {

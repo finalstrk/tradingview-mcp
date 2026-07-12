@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   CdpAbortError,
   CdpDeadlineError,
+  CdpTransportError,
   createConnectionManager,
 } from '../src/connection.js';
 
@@ -137,9 +138,43 @@ describe('CDP connection lifecycle', () => {
     const { manager } = createManager({ clients: [invalid, healthy] });
 
     await manager.getClient();
-    await assert.rejects(manager.checkClientHealth({ timeoutMs: 50 }), /WebSocket closed/);
+    await assert.rejects(manager.checkClientHealth({ timeoutMs: 50 }), error => {
+      assert.ok(error instanceof CdpTransportError);
+      assert.equal(error.code, 'CDP_TRANSPORT_ERROR');
+      assert.equal(error.operation, 'Runtime.evaluate');
+      assert.equal(error.timeoutMs, 50);
+      assert.equal(error.ambiguous, true);
+      assert.equal(error.retryable, false);
+      return true;
+    });
     assert.equal(invalid.closeCalls, 1);
     assert.equal(await manager.getClient(), healthy);
+    assert.equal(invalid.closeCalls, 1);
+  });
+
+  it('normalizes a generic health-check transport failure and reconnects once', async () => {
+    const transportCause = new Error('secret health transport detail');
+    const invalid = createClient({
+      evaluate: async () => { throw transportCause; },
+    });
+    const healthy = createClient();
+    const { manager, factoryCalls } = createManager({ clients: [invalid, healthy] });
+
+    await manager.getClient();
+    await assert.rejects(manager.checkClientHealth({ timeoutMs: 50 }), error => {
+      assert.ok(error instanceof CdpTransportError);
+      assert.equal(error.code, 'CDP_TRANSPORT_ERROR');
+      assert.equal(error.operation, 'Runtime.evaluate');
+      assert.equal(error.timeoutMs, 50);
+      assert.equal(error.ambiguous, true);
+      assert.equal(error.retryable, false);
+      assert.equal(error.cause, transportCause);
+      assert.doesNotMatch(JSON.stringify(error), /secret health transport detail/);
+      return true;
+    });
+    assert.equal(invalid.closeCalls, 1);
+    assert.equal(await manager.getClient(), healthy);
+    assert.equal(factoryCalls(), 2);
     assert.equal(invalid.closeCalls, 1);
   });
 });
@@ -365,18 +400,29 @@ describe('bounded CDP operations', () => {
     assert.equal(candidate.closeCalls, 1);
   });
 
-  it('never automatically replays a mutating expression after transport failure', async () => {
+  it('normalizes a generic evaluate transport failure without leaking its cause', async () => {
     let firstCalls = 0;
+    const transportCause = new Error('secret transport detail');
     const failed = createClient({
       evaluate: async () => {
         firstCalls += 1;
-        throw new Error('ambiguous transport failure');
+        throw transportCause;
       },
     });
     const healthy = createClient({ evaluate: async () => ({ result: { value: 'second call' } }) });
     const { manager, factoryCalls } = createManager({ clients: [failed, healthy] });
 
-    await assert.rejects(manager.evaluate('window.orderCount += 1'), /ambiguous transport failure/);
+    await assert.rejects(manager.evaluate('window.orderCount += 1'), error => {
+      assert.ok(error instanceof CdpTransportError);
+      assert.equal(error.code, 'CDP_TRANSPORT_ERROR');
+      assert.equal(error.operation, 'Runtime.evaluate');
+      assert.equal(error.timeoutMs, 15000);
+      assert.equal(error.ambiguous, true);
+      assert.equal(error.retryable, false);
+      assert.equal(error.cause, transportCause);
+      assert.doesNotMatch(JSON.stringify(error), /secret transport detail/);
+      return true;
+    });
     assert.equal(firstCalls, 1);
     assert.equal(factoryCalls(), 1);
     assert.equal(failed.closeCalls, 1);

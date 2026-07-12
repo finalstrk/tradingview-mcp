@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import {
   CdpAbortError,
   CdpDeadlineError,
+  CdpTransportError,
   createConnectionManager,
 } from '../src/connection.js';
 import { batchRun } from '../src/core/batch.js';
@@ -82,11 +83,13 @@ function createClient({ evaluate, captureScreenshot, dispatchKeyEvent } = {}) {
 
 function createManager(client, overrides = {}) {
   let factoryCalls = 0;
+  const queue = [...(overrides.clients || [client])];
+  const { clients: _clients, ...managerOverrides } = overrides;
   return {
     manager: createConnectionManager({
       cdpFactory: async () => {
         factoryCalls += 1;
-        return client;
+        return queue.shift() || client;
       },
       fetchFn: async () => ({
         ok: true,
@@ -95,7 +98,7 @@ function createManager(client, overrides = {}) {
       sleep: async () => {},
       maxRetries: 1,
       baseDelay: 0,
-      ...overrides,
+      ...managerOverrides,
     }),
     factoryCalls: () => factoryCalls,
   };
@@ -111,8 +114,9 @@ async function loadPineWithConnection(connection) {
     setTimeout,
   });
   const connectionModule = new vm.SyntheticModule(
-    ['evaluate', 'evaluateAsync', 'getClient', 'sendCdpCommand'],
+    ['CdpAbortError', 'evaluate', 'evaluateAsync', 'getClient', 'sendCdpCommand'],
     function initialize() {
+      this.setExport('CdpAbortError', CdpAbortError);
       this.setExport('evaluate', connection.evaluate);
       this.setExport('evaluateAsync', connection.evaluateAsync || connection.evaluate);
       this.setExport('getClient', connection.getClient);
@@ -187,6 +191,46 @@ test('cached-client raw command hot path sends exactly one requested command', a
   assert.equal(evaluateCalls, 0, 'raw hot path must not add a liveness probe');
   assert.equal(factoryCalls(), 1);
   assert.equal(client.closeCalls, 0);
+});
+
+test('normalizes a generic raw-command transport failure and reconnects without replay', async () => {
+  const transportCause = new Error('secret raw transport detail');
+  let failedCalls = 0;
+  const failed = createClient({
+    captureScreenshot: async () => {
+      failedCalls += 1;
+      throw transportCause;
+    },
+  });
+  const healthy = createClient({
+    captureScreenshot: async () => ({ data: 'reconnected' }),
+  });
+  const { manager, factoryCalls } = createManager(failed, { clients: [failed, healthy] });
+  await manager.getClient();
+
+  await assert.rejects(
+    manager.sendCdpCommand('Page', 'captureScreenshot', { format: 'png' }),
+    error => {
+      assert.ok(error instanceof CdpTransportError);
+      assert.equal(error.code, 'CDP_TRANSPORT_ERROR');
+      assert.equal(error.operation, 'Page.captureScreenshot');
+      assert.equal(error.timeoutMs, 15000);
+      assert.equal(error.ambiguous, true);
+      assert.equal(error.retryable, false);
+      assert.equal(error.cause, transportCause);
+      assert.doesNotMatch(JSON.stringify(error), /secret raw transport detail/);
+      return true;
+    },
+  );
+  assert.equal(failedCalls, 1);
+  assert.equal(failed.closeCalls, 1);
+
+  assert.deepEqual(
+    await manager.sendCdpCommand('Page', 'captureScreenshot', { format: 'png' }),
+    { data: 'reconnected' },
+  );
+  assert.equal(factoryCalls(), 2);
+  assert.equal(failed.closeCalls, 1);
 });
 
 test('chart helper discovery propagates AbortSignal and releases its listener/client', async () => {
@@ -314,6 +358,63 @@ for (const [name, evaluateResults] of [
     assert.equal(inputCalls, 1);
     assert.equal(listenerCount(), 0);
     assert.equal(client.closeCalls, 1);
+  });
+}
+
+for (const fixture of [
+  { name: 'compile click', method: 'compile', evaluateResults: [true, 'Add to chart'], operation: 'Pine.compile.wait' },
+  { name: 'compile keyboard', method: 'compile', evaluateResults: [true, null], operation: 'Pine.compile.wait' },
+  { name: 'save after key dispatch', method: 'save', evaluateResults: [true], operation: 'Pine.save.wait' },
+  { name: 'smartCompile click', method: 'smartCompile', evaluateResults: [true, 0, 'Add to chart'], operation: 'Pine.smartCompile.wait' },
+  { name: 'smartCompile keyboard', method: 'smartCompile', evaluateResults: [true, 0, null], operation: 'Pine.smartCompile.wait' },
+]) {
+  test(`Pine ${fixture.name} cancellation during fixed post-action wait is typed and secret-safe`, async () => {
+    const controller = new AbortController();
+    const listenerCount = trackAbortListeners(controller.signal);
+    let inputCalls = 0;
+    let abortScheduled = false;
+    const scheduleAbort = () => {
+      if (abortScheduled) return;
+      abortScheduled = true;
+      setTimeout(() => controller.abort(new Error('secret Pine cancellation cause')), 0);
+    };
+    const client = createClient({
+      dispatchKeyEvent: async event => {
+        inputCalls += 1;
+        if (event.type === 'keyUp') scheduleAbort();
+        return {};
+      },
+    });
+    const { manager } = createManager(client);
+    await manager.getClient();
+    const results = [...fixture.evaluateResults];
+    const pine = await loadPineWithConnection({
+      evaluate: async () => {
+        const value = results.shift();
+        if (typeof value === 'string') scheduleAbort();
+        return value;
+      },
+      evaluateAsync: async () => results.shift(),
+      getClient: async () => client,
+      sendCdpCommand: (...args) => manager.sendCdpCommand(...args),
+    });
+
+    await assert.rejects(
+      settleWithin(pine[fixture.method]({ signal: controller.signal, timeoutMs: 1000 }), 100, `${fixture.name} ignored abort`),
+      error => {
+        assert.ok(error instanceof CdpAbortError);
+        assert.equal(error.code, 'CDP_OPERATION_ABORTED');
+        assert.equal(error.operation, fixture.operation);
+        assert.equal(error.ambiguous, true);
+        assert.equal(error.retryable, false);
+        assert.doesNotMatch(JSON.stringify(error), /secret Pine cancellation cause/);
+        return true;
+      },
+    );
+    const expectedInputCalls = fixture.name.includes('click') ? 0 : 2;
+    assert.equal(inputCalls, expectedInputCalls);
+    assert.equal(listenerCount(), 0);
+    assert.equal(client.closeCalls, 0);
   });
 }
 
