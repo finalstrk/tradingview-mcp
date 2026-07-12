@@ -20,9 +20,10 @@ failed to produce visible Monaco state within the bounded poll. The current
 post-run closed snapshot is current-state evidence only; it is not causal
 proof that a close operation succeeded after an open.
 
-No additional CDP/UI/network/npm operation is permitted under the spent A1
-envelope. A new close path, fallback, digest, and approval nonce are required
-before another live attempt.
+No additional live CDP/UI/network operation, exact A1 command, or full/live
+npm gate is permitted under the spent A1 envelope. Offline unit and A0 tests
+remain safe to rerun. A new close path, fallback, digest, and approval nonce
+are required before another live attempt.
 
 ## Evidence and rejected inferences
 
