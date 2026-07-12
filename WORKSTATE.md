@@ -19,8 +19,9 @@ Last updated: 2026-07-12
   groups. The remaining baseline raw CDP calls are P2 notes outside the
   accepted P1 paths.
 - Gate A0 Pine discovery is implemented and independently Approved. The
-  offline spec is 157/157 on three consecutive runs; the unit gate is
-  269/269. The frozen artifact digest is
+  offline spec is 157/157 on three consecutive runs; the original unit gate
+  was 269/269 and the latest post-review unit gate is 277/277. The frozen
+  artifact digest is
   `0400ce7e163bc475f2a68609551754fe4530f67062ba87ca6e0e3cb25d5d9125`.
 - Gate A1 was attempted once. The exact command, target tuple, budgets, and
   residual caveat are frozen in the A0 approval envelope. The one approved attempt
@@ -39,6 +40,12 @@ Last updated: 2026-07-12
   boundary, and P1-10 a new close-strategy approval artifact. These are
   offline-first and require a new implementation/design approval; the old
   A1 nonce cannot be reused.
+- Final read-only review findings were resolved offline. `4d8d75f` clarifies
+  the intentional health reuse-first contract in MCP/CLI help and adds
+  description regression tests. `5f873a6` adds fixed `CdpTransportError`
+  metadata for generic transport failures and typed `CdpAbortError` results
+  for Pine post-action waits, with raw-cause-safe reconnect and cancellation
+  fixtures. No live behavior or Gate A1 allowance was expanded.
 - Gate B/full live E2E and the final broad review remain pending. No `npm test`,
   additional live CRI/CDP operation, TradingView/UI mutation, network POST,
   save, reload, tab/process operation, or Gate A1 retry was run in this stream.
@@ -124,6 +131,9 @@ Last updated: 2026-07-12
 - 2026-07-08: Verified `node --check scripts/strategy_spec_check.js`, `node --check tests/strategy_spec_check.test.js`, existing daily-review checks, and `git diff --check`; all passed.
 - 2026-07-08: Ran `npm run test:unit`; 36/36 tests passed after adding `tests/strategy_spec_check.test.js` to `test:unit`.
 - 2026-07-08: Ran `npm run --silent strategy-spec-check -- --template` and parsed the output as JSON; ran `npm run --silent strategy-spec-check -- /tmp/complete_strategy_spec.json --strict`, which produced a complete paper/watch-only report with `live_order_allowed=false`.
+- 2026-07-12: Re-ran syntax checks for the post-review health/CDP/Pine changes; all passed.
+- 2026-07-12: Re-ran focused `connection`, `raw_command`, and `health_launch` tests: 46/46 passed.
+- 2026-07-12: Re-ran `npm run test:unit` after post-review remediation: 277/277 tests passed, 37 suites, fail/cancelled/skipped 0.
 - 2026-07-08: Launched TradingView Desktop with `HOME=/home/yukio` and CDP port 9222, then repaired current Linux/TradingView-build E2E drift: Linux binary path detection, visible-range assertion, bottom widget close fallback, and replay-stop cleanup.
 - 2026-07-08: Ran targeted E2E for `tv_launch|chart_set_visible_range|ui_open_panel|replay_stop`; 4/4 passed.
 - 2026-07-08: Ran full `npm run test`; 95/95 tests passed.

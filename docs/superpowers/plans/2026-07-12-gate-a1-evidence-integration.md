@@ -107,6 +107,30 @@ set before code changes begin.
 - **Done when:** independent review has zero Critical/Important findings and
   the user provides written approval for the new envelope.
 
+## Post-review remediation completed offline
+
+The independent final review found two P1-01 safety-boundary gaps and one
+low-severity contract drift. They were fixed without live operations:
+
+- **P1-01 transport metadata:** `CdpTransportError` now wraps generic
+  transport failures after client invalidation with fixed
+  `CDP_TRANSPORT_ERROR`, operation, timeout, `ambiguous=true`, and
+  `retryable=false`; the raw cause is retained only for diagnostics and is
+  excluded from JSON. Reconnect and close-once fixtures cover evaluate,
+  raw-command, and health-check paths.
+- **P1-01 Pine cancellation:** fixed post-click, post-keyboard, and post-save
+  waits now raise typed `CdpAbortError` values with operation-specific names.
+  Five offline fixtures cover compile, save, and smart-compile paths and
+  assert fixed metadata plus no raw cancellation-cause leakage.
+- **Health contract drift:** the MCP schema and CLI help now say that healthy
+  CDP endpoints are always reused and `kill_existing` applies only before a
+  new launch when no healthy endpoint is available. Lifecycle behavior was
+  unchanged and the wording is regression-tested.
+
+Verification for these remediations is syntax clean, focused tests 46/46,
+and `npm run test:unit` 277/277 across 37 suites with zero failure,
+cancellation, or skip.
+
 No P0 is demonstrated by the available evidence. P1 is warranted because
 cleanup and Pine-state causality cannot be proven, while the current snapshot
 and target identity remained stable.
@@ -114,9 +138,9 @@ and target identity remained stable.
 ## Completion boundary
 
 Already complete: P1-01 through P1-06 implementation and benchmarks,
-269/269 unit tests, Gate A0 157/157 on three consecutive runs, independent
-A0 review, frozen digest, one bounded A1 attempt, evidence integration, and
-clean synchronized commits.
+post-review P1-01 remediation, 277/277 unit tests, Gate A0 157/157 on three
+consecutive runs, independent A0 review, frozen digest, one bounded A1
+attempt, evidence integration, and clean synchronized commits.
 
 Still unmet: successful Pine discovery, causal source/dirty/save/Cloud
 evidence, Gate A evidence decision, P1-07 through P1-10 implementation and
