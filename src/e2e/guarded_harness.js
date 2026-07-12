@@ -19,12 +19,12 @@ const REQUIRED_OPERATIONS = Object.freeze([
 ]);
 
 export const LIVE_SUITE_MIGRATION_REGISTRY = Object.freeze([
-  Object.freeze({ file: 'tests/e2e.test.js', state: 'pending' }),
-  Object.freeze({ file: 'tests/batch_e2e.test.js', state: 'pending' }),
-  Object.freeze({ file: 'tests/graphics_e2e.test.js', state: 'pending' }),
-  Object.freeze({ file: 'tests/launch_e2e.test.js', state: 'pending' }),
-  Object.freeze({ file: 'tests/pine_facade_e2e.test.js', state: 'pending' }),
-  Object.freeze({ file: 'tests/quote_e2e.test.js', state: 'pending' }),
+  Object.freeze({ file: 'tests/e2e.test.js', state: 'ready' }),
+  Object.freeze({ file: 'tests/batch_e2e.test.js', state: 'ready' }),
+  Object.freeze({ file: 'tests/graphics_e2e.test.js', state: 'ready' }),
+  Object.freeze({ file: 'tests/launch_e2e.test.js', state: 'ready' }),
+  Object.freeze({ file: 'tests/pine_facade_e2e.test.js', state: 'ready' }),
+  Object.freeze({ file: 'tests/quote_e2e.test.js', state: 'ready' }),
 ]);
 
 const BYPASS_PATTERNS = Object.freeze([
@@ -358,7 +358,7 @@ function isLiveTest(name) {
   return name === 'e2e.test.js' || name.endsWith('_e2e.test.js');
 }
 
-/** Read-only static gate. Any new live file or any pending migration fails it. */
+/** Read-only static gate. Unknown files, pending migrations, or bypasses fail. */
 export async function scanLiveSuiteBoundary(rootDirectory) {
   const names = (await readdir(join(rootDirectory, 'tests'))).filter(isLiveTest).sort();
   const known = new Set(LIVE_SUITE_MIGRATION_REGISTRY.map(entry => entry.file));
@@ -366,6 +366,9 @@ export async function scanLiveSuiteBoundary(rootDirectory) {
   const unknownFiles = actual.filter(file => !known.has(file));
   const missingFiles = [...known].filter(file => !actual.includes(file));
   const bypasses = [];
+  const pending = LIVE_SUITE_MIGRATION_REGISTRY
+    .filter(entry => entry.state !== 'ready')
+    .map(entry => entry.file);
 
   for (const file of actual.filter(value => known.has(value))) {
     const source = await readFile(join(rootDirectory, file), 'utf8');
@@ -377,15 +380,28 @@ export async function scanLiveSuiteBoundary(rootDirectory) {
   if (unknownFiles.length > 0 || missingFiles.length > 0) {
     return Object.freeze({
       status: 'failure', code: 'LIVE_SUITE_BOUNDARY_DRIFT',
-      pending: Object.freeze(LIVE_SUITE_MIGRATION_REGISTRY.map(entry => entry.file)),
+      pending: Object.freeze(pending),
       bypasses: Object.freeze(bypasses),
       unknown_files: Object.freeze(unknownFiles), missing_files: Object.freeze(missingFiles),
     });
   }
+  if (pending.length > 0) {
+    return Object.freeze({
+      status: 'failure', code: 'LIVE_SUITE_MIGRATION_REQUIRED',
+      pending: Object.freeze(pending), bypasses: Object.freeze(bypasses),
+      unknown_files: Object.freeze([]), missing_files: Object.freeze([]),
+    });
+  }
+  if (bypasses.length > 0) {
+    return Object.freeze({
+      status: 'failure', code: 'LIVE_SUITE_BYPASS_DETECTED',
+      pending: Object.freeze([]), bypasses: Object.freeze(bypasses),
+      unknown_files: Object.freeze([]), missing_files: Object.freeze([]),
+    });
+  }
   return Object.freeze({
-    status: 'failure', code: 'LIVE_SUITE_MIGRATION_REQUIRED',
-    pending: Object.freeze(LIVE_SUITE_MIGRATION_REGISTRY.map(entry => entry.file)),
-    bypasses: Object.freeze(bypasses),
+    status: 'success', code: 'LIVE_SUITE_MIGRATION_READY',
+    pending: Object.freeze([]), bypasses: Object.freeze([]),
     unknown_files: Object.freeze([]), missing_files: Object.freeze([]),
   });
 }

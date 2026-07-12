@@ -9,6 +9,7 @@ const REQUEST_KEYS = Object.freeze([
   'sequence',
 ]);
 const RESULT_KEYS = Object.freeze(['code', 'status']);
+const ADAPTER_RESULT_KEYS = Object.freeze(['code', 'effect_started', 'status']);
 const RESULT_STATUSES = new Set(['success', 'failure', 'unknown']);
 const FIXED_ADAPTER_CODES = new Set([
   'CASE_OK',
@@ -22,8 +23,8 @@ const ADAPTER_STATUS_CODE = Object.freeze({
 });
 const FIXED_WIRE_CODES = new Set([
   ...FIXED_ADAPTER_CODES,
-  'ADAPTER_FAILURE',
   'ADAPTER_OUTCOME_INVALID',
+  'ADAPTER_OUTCOME_UNKNOWN',
   'IPC_AUTH_FAILED',
   'IPC_BUDGET_EXCEEDED',
   'IPC_CASE_UNKNOWN',
@@ -36,27 +37,43 @@ const FIXED_WIRE_CODES = new Set([
 ]);
 const MAX_REQUEST_BYTES = 4096;
 const BUDGET_KEYS = Object.freeze([
-  'ctrl_s_chord_count',
+  'capture_count',
+  'cdp_protocol_input_count',
+  'cdp_protocol_mutation_count',
+  'cdp_protocol_read_count',
+  'cdp_session_attach_count',
+  'cdp_session_detach_count',
+  'child_process_count',
   'full_external_gate_invocation_count',
-  'harness_initiated_network_count',
-  'key_event_count',
-  'page_reload_count',
-  'pine_facade_post_count',
-  'tab_close_count',
-  'tab_create_count',
-  'tradingview_process_kill_count',
-  'tradingview_process_start_count',
+  'logical_operation_count',
+  'network_request_count',
 ]);
 
 export const GATE_B_IPC_CASE_REGISTRY = Object.freeze({
-  ctrl_s: Object.freeze({ ctrl_s_chord_count: 1, key_event_count: 2 }),
-  page_reload: Object.freeze({ page_reload_count: 1 }),
-  pine_facade_1: Object.freeze({ pine_facade_post_count: 1, harness_initiated_network_count: 1 }),
-  pine_facade_2: Object.freeze({ pine_facade_post_count: 1, harness_initiated_network_count: 1 }),
-  pine_facade_3: Object.freeze({ pine_facade_post_count: 1, harness_initiated_network_count: 1 }),
-  pine_facade_4: Object.freeze({ pine_facade_post_count: 1, harness_initiated_network_count: 1 }),
-  pine_facade_5: Object.freeze({ pine_facade_post_count: 1, harness_initiated_network_count: 1 }),
-  pine_facade_6: Object.freeze({ pine_facade_post_count: 1, harness_initiated_network_count: 1 }),
+  chart_suite_health_1: Object.freeze({}),
+  chart_suite_chart_1: Object.freeze({}),
+  chart_suite_data_1: Object.freeze({}),
+  chart_suite_pine_1: Object.freeze({}),
+  chart_suite_drawing_1: Object.freeze({}),
+  chart_suite_ui_1: Object.freeze({}),
+  chart_suite_replay_1: Object.freeze({}),
+  chart_suite_alerts_1: Object.freeze({}),
+  chart_suite_watchlist_1: Object.freeze({}),
+  chart_suite_indicators_1: Object.freeze({}),
+  chart_suite_batch_1: Object.freeze({}),
+  chart_suite_capture_1: Object.freeze({}),
+  chart_suite_context_size_1: Object.freeze({}),
+  batch_1: Object.freeze({}),
+  quote_1: Object.freeze({}),
+  quote_2: Object.freeze({}),
+  pine_facade_1: Object.freeze({}),
+  pine_facade_2: Object.freeze({}),
+  pine_facade_3: Object.freeze({}),
+  pine_facade_4: Object.freeze({}),
+  pine_facade_5: Object.freeze({}),
+  graphics_ohlcv_1: Object.freeze({}),
+  graphics_primitives_1: Object.freeze({}),
+  launch_reuse_1: Object.freeze({}),
 });
 
 function canonicalJson(value) {
@@ -88,12 +105,47 @@ export function isLoopbackPeer(address) {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 }
 
-function validateConfig({ runId, capabilityToken, budgets, adapter }) {
+export function createBudgetAuthorizedAdapters({ adapters, control } = {}) {
+  const names = ['capture', 'input', 'inspectIdentity', 'mutate', 'network', 'read'];
+  if (
+    !adapters || typeof adapters !== 'object' || Array.isArray(adapters)
+    || Object.keys(adapters).sort().some((key, index) => key !== names[index])
+    || Object.keys(adapters).length !== names.length
+    || names.some(name => typeof adapters[name] !== 'function')
+    || !control || typeof control.authorize !== 'function'
+  ) throw new TypeError('IPC_ADAPTER_CONFIGURATION_INVALID');
+  const invoke = (name, counter, args) => {
+    control.authorize(counter, 1);
+    return Reflect.apply(adapters[name], adapters, args);
+  };
+  return Object.freeze({
+    inspectIdentity: (...args) => invoke('inspectIdentity', 'cdp_protocol_read_count', args),
+    read: (...args) => invoke('read', 'cdp_protocol_read_count', args),
+    mutate: (...args) => invoke('mutate', 'cdp_protocol_mutation_count', args),
+    input(method, params, ...rest) {
+      if (!['insertText', 'dispatchMouseEvent', 'dispatchKeyEvent'].includes(method)) throw new TypeError('IPC_INPUT_CAPABILITY_DENIED');
+      return invoke('input', 'cdp_protocol_input_count', [method, params, ...rest]);
+    },
+    capture(method, params, ...rest) {
+      if (method !== 'captureScreenshot') throw new TypeError('IPC_CAPTURE_CAPABILITY_DENIED');
+      return invoke('capture', 'capture_count', [method, params, ...rest]);
+    },
+    network(request, ...rest) {
+      control.authorize('network_request_count', 1);
+      return Reflect.apply(adapters.network, adapters, [request, ...rest]);
+    },
+  });
+}
+
+function validateConfig({ runId, capabilityToken, budgets, adapter, adapterDeadlineMs }) {
   if (typeof runId !== 'string' || runId.length < 32 || runId.length > 128) throw new TypeError('IPC_CONFIG_INVALID');
   if (typeof capabilityToken !== 'string' || capabilityToken.length < 48 || capabilityToken.length > 256) {
     throw new TypeError('IPC_CONFIG_INVALID');
   }
   if (safeEqual(runId, capabilityToken)) throw new TypeError('IPC_CONFIG_INVALID');
+  if (!Number.isInteger(adapterDeadlineMs) || adapterDeadlineMs < 1 || adapterDeadlineMs > 30_000) {
+    throw new TypeError('IPC_CONFIG_INVALID');
+  }
   if (typeof adapter !== 'function' || !budgets || typeof budgets !== 'object' || Array.isArray(budgets)) {
     throw new TypeError('IPC_CONFIG_INVALID');
   }
@@ -115,11 +167,14 @@ function exactRequest(value) {
 function validateAdapterResult(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value).sort();
-  return keys.length === RESULT_KEYS.length
-    && keys.every((key, index) => key === RESULT_KEYS[index])
+  return keys.length === ADAPTER_RESULT_KEYS.length
+    && keys.every((key, index) => key === ADAPTER_RESULT_KEYS[index])
     && RESULT_STATUSES.has(value.status)
+    && typeof value.effect_started === 'boolean'
     && FIXED_ADAPTER_CODES.has(value.code)
-    && ADAPTER_STATUS_CODE[value.status] === value.code;
+    && ADAPTER_STATUS_CODE[value.status] === value.code
+    && (value.status !== 'failure' || value.effect_started === false)
+    && (value.status !== 'success' || value.effect_started === true);
 }
 
 function writeResult(response, result) {
@@ -146,13 +201,32 @@ async function readJson(request) {
 
 export async function createGateBLoopbackLedger(config) {
   validateConfig(config || {});
-  const { runId, capabilityToken, budgets, adapter } = config;
+  const { runId, capabilityToken, budgets, adapter, adapterDeadlineMs } = config;
   const counters = { ...Object.fromEntries(Object.keys(budgets).map(key => [key, 0])), outcome_unknown_count: 0 };
   let lastSequence = 0;
+  let controlBound = false;
+  let dispatchAuthorizedEffects = null;
 
   const snapshot = () => Object.freeze({ ...counters });
+  const control = Object.freeze({
+    snapshot,
+    authorize(counter, delta = 1) {
+      if (!BUDGET_KEYS.includes(counter) || !Number.isSafeInteger(delta) || delta < 1) {
+        const error = new Error('IPC_BUDGET_INVALID');
+        error.code = 'IPC_BUDGET_INVALID';
+        throw error;
+      }
+      if (counters[counter] + delta > budgets[counter]) {
+        const error = new Error('IPC_BUDGET_EXCEEDED');
+        error.code = 'IPC_BUDGET_EXCEEDED';
+        throw error;
+      }
+      counters[counter] += delta;
+      if (dispatchAuthorizedEffects !== null) dispatchAuthorizedEffects += delta;
+    },
+  });
 
-  async function dispatch(payload, remoteAddress) {
+  async function dispatchOne(payload, remoteAddress) {
     if (!isLoopbackPeer(remoteAddress)) return fixedResult('failure', 'IPC_NON_LOOPBACK');
     if (!exactRequest(payload)) return fixedResult('failure', 'IPC_REQUEST_INVALID');
     if (!safeEqual(payload.run_id, runId)) return fixedResult('failure', 'IPC_RUN_MISMATCH');
@@ -166,25 +240,48 @@ export async function createGateBLoopbackLedger(config) {
     }
     if (payload.sequence !== lastSequence + 1) return fixedResult('failure', 'IPC_SEQUENCE_GAP');
 
-    const deltas = GATE_B_IPC_CASE_REGISTRY[payload.case_id];
-    for (const [counter, delta] of Object.entries(deltas)) {
-      if (counters[counter] + delta > budgets[counter]) return fixedResult('failure', 'IPC_BUDGET_EXCEEDED');
-    }
-
-    // Sequence and budget are reserved synchronously before adapter dispatch.
+    // Sequence is reserved before dispatch. Individual effects are authorized
+    // synchronously by the reviewed adapter immediately before each action.
     lastSequence = payload.sequence;
-    for (const [counter, delta] of Object.entries(deltas)) counters[counter] += delta;
+    dispatchAuthorizedEffects = 0;
     try {
-      const result = await adapter(payload.case_id, snapshot());
+      let timer;
+      const result = await Promise.race([
+        Promise.resolve().then(() => adapter(payload.case_id, snapshot(), control)),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error('IPC_ADAPTER_DEADLINE');
+            error.code = 'IPC_ADAPTER_DEADLINE';
+            reject(error);
+          }, adapterDeadlineMs);
+        }),
+      ]).finally(() => clearTimeout(timer));
       if (!validateAdapterResult(result)) {
+        counters.outcome_unknown_count += 1;
+        return fixedResult('unknown', 'ADAPTER_OUTCOME_INVALID');
+      }
+      if (result.status === 'failure' && dispatchAuthorizedEffects > 0) {
         counters.outcome_unknown_count += 1;
         return fixedResult('unknown', 'ADAPTER_OUTCOME_INVALID');
       }
       if (result.status === 'unknown') counters.outcome_unknown_count += 1;
       return fixedResult(result.status, result.code);
-    } catch {
-      return fixedResult('failure', 'ADAPTER_FAILURE');
+    } catch (error) {
+      if (error?.code === 'IPC_BUDGET_EXCEEDED' && dispatchAuthorizedEffects === 0) {
+        return fixedResult('failure', 'IPC_BUDGET_EXCEEDED');
+      }
+      counters.outcome_unknown_count += 1;
+      return fixedResult('unknown', 'ADAPTER_OUTCOME_UNKNOWN');
+    } finally {
+      dispatchAuthorizedEffects = null;
     }
+  }
+
+  let dispatchTail = Promise.resolve();
+  function dispatch(payload, remoteAddress) {
+    const current = dispatchTail.then(() => dispatchOne(payload, remoteAddress));
+    dispatchTail = current.then(() => undefined, () => undefined);
+    return current;
   }
 
   const server = createServer(async (request, response) => {
@@ -215,6 +312,11 @@ export async function createGateBLoopbackLedger(config) {
   return Object.freeze({
     port: address.port,
     snapshot,
+    bindControl() {
+      if (controlBound) throw new TypeError('IPC_CONTROL_ALREADY_BOUND');
+      controlBound = true;
+      return control;
+    },
     async close() {
       if (closed) return;
       closed = true;

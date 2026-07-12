@@ -4,6 +4,7 @@ const ALLOWED_METHODS = new Set([
   'DOM.getDocument',
   'DOM.querySelector',
   'Runtime.evaluate',
+  'Runtime.callFunctionOn',
   'Runtime.getProperties',
 ]);
 

@@ -10,7 +10,12 @@ import {
   scanLiveSuiteBoundary,
 } from '../src/e2e/guarded_harness.js';
 import {
+  createApprovalBoundBenchmarkRunner,
+  createBatchCaseOwner,
+  createGateBLoopbackLedger,
   createGuardedE2EHarness as publicCreateGuardedE2EHarness,
+  createPhase0ReadOnlyPlan,
+  createQuoteCaseOwner,
   scanLiveSuiteBoundary as publicScanLiveSuiteBoundary,
 } from '../src/e2e/index.js';
 
@@ -119,6 +124,10 @@ function harness(operations, cases = CASES, deadlineMs = 30) {
 test('exports the guarded harness through the E2E boundary', () => {
   assert.equal(publicCreateGuardedE2EHarness, createGuardedE2EHarness);
   assert.equal(publicScanLiveSuiteBoundary, scanLiveSuiteBoundary);
+  for (const exported of [
+    createApprovalBoundBenchmarkRunner, createBatchCaseOwner, createGateBLoopbackLedger,
+    createPhase0ReadOnlyPlan, createQuoteCaseOwner,
+  ]) assert.equal(typeof exported, 'function');
 });
 
 test('runs every surface serially under one explicit target and restores all mutations', async () => {
@@ -209,7 +218,7 @@ test('configuration rejects duplicate cases and mutable target aliases', () => {
   assert.equal(Object.isFrozen(runner.target), true);
 });
 
-test('static boundary gate fail-closes every live suite pending migration', async () => {
+test('static boundary gate rejects bypasses after every live suite migration', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gate-b-boundary-'));
   await mkdir(join(root, 'tests'));
   const fixtures = {
@@ -224,11 +233,21 @@ test('static boundary gate fail-closes every live suite pending migration', asyn
 
   const report = await scanLiveSuiteBoundary(root);
   assert.equal(report.status, 'failure');
-  assert.equal(report.code, 'LIVE_SUITE_MIGRATION_REQUIRED');
-  assert.deepEqual(report.pending, LIVE_SUITE_MIGRATION_REGISTRY.map(entry => entry.file));
+  assert.equal(report.code, 'LIVE_SUITE_BYPASS_DETECTED');
+  assert.deepEqual(report.pending, []);
   assert.deepEqual(report.bypasses.map(entry => entry.kind).sort(), [
     'child-process', 'direct-cdp', 'direct-cdp', 'direct-fetch', 'direct-input',
   ]);
+});
+
+test('static boundary gate accepts the real migrated children with zero direct bypasses', async () => {
+  const root = new URL('..', import.meta.url).pathname;
+  const report = await scanLiveSuiteBoundary(root);
+  assert.equal(report.status, 'success');
+  assert.equal(report.code, 'LIVE_SUITE_MIGRATION_READY');
+  assert.deepEqual(report.pending, []);
+  assert.deepEqual(report.bypasses, []);
+  assert.ok(LIVE_SUITE_MIGRATION_REGISTRY.every(entry => entry.state === 'ready'));
 });
 
 test('static boundary gate rejects unknown live suites and registry drift', async () => {

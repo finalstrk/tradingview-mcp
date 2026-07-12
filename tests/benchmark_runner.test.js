@@ -10,6 +10,13 @@ const DIGESTS = Object.freeze({
   manifest: '9'.repeat(64),
   build: 'd'.repeat(64),
   workload: 'e'.repeat(64),
+  baseline: '1'.repeat(64),
+  baselineExecutor: '6'.repeat(64),
+  candidate: '2'.repeat(64),
+  candidateExecutor: '7'.repeat(64),
+  benchmarkWorkload: '3'.repeat(64),
+  baselineCommit: '4'.repeat(40),
+  candidateCommit: '5'.repeat(40),
 });
 const TARGET = Object.freeze({
   targetId: 'target-1', sessionId: 'session-1', executionContextId: 7,
@@ -17,11 +24,23 @@ const TARGET = Object.freeze({
 
 function provenance(overrides = {}) {
   return {
+    baseline_artifact_sha256: DIGESTS.baseline,
+    baseline_executor_artifact_sha256: DIGESTS.baselineExecutor,
+    baseline_executor_module_path: 'src/e2e/benchmark/baseline_executor.js',
+    baseline_executor_repository_commit: DIGESTS.baselineCommit,
+    baseline_module_path: 'src/e2e/benchmark/baseline_workload.js',
+    baseline_repository_commit: DIGESTS.baselineCommit,
+    benchmark_workload_sha256: DIGESTS.benchmarkWorkload,
     envelope_sha256: DIGESTS.envelope,
     repository_head: DIGESTS.head,
     working_tree_diff_sha256: DIGESTS.diff,
     test_manifest_sha256: DIGESTS.manifest,
     build_sha256: DIGESTS.build,
+    candidate_artifact_sha256: DIGESTS.candidate,
+    candidate_executor_artifact_sha256: DIGESTS.candidateExecutor,
+    candidate_executor_module_path: 'src/e2e/benchmark/candidate_executor.js',
+    candidate_module_path: 'src/e2e/benchmark/candidate_workload.js',
+    candidate_repository_commit: DIGESTS.candidateCommit,
     workload_sha256: DIGESTS.workload,
     target: { ...TARGET },
     ...overrides,
@@ -78,7 +97,11 @@ test('runs 30 paired samples with one provenance and returns only secret-safe ag
     'after_samples', 'before_samples', 'bindings', 'schema',
   ]);
   assert.deepEqual(Object.keys(rawArtifacts[0].bindings).sort(), [
-    'build_sha256', 'envelope_sha256', 'repository_head', 'test_manifest_sha256',
+    'baseline_artifact_sha256', 'baseline_executor_artifact_sha256', 'baseline_executor_module_path',
+    'baseline_executor_repository_commit', 'baseline_module_path', 'baseline_repository_commit',
+    'benchmark_workload_sha256', 'build_sha256', 'candidate_artifact_sha256',
+    'candidate_executor_artifact_sha256', 'candidate_executor_module_path', 'candidate_module_path',
+    'candidate_repository_commit', 'envelope_sha256', 'repository_head', 'test_manifest_sha256',
     'working_tree_diff_sha256', 'workload_sha256',
   ]);
   assert.equal(rawArtifacts[0].before_samples.length, 30);
@@ -94,6 +117,8 @@ test('runs 30 paired samples with one provenance and returns only secret-safe ag
 test('rejects digest mismatch and target drift before the next action', async () => {
   for (const changed of [
     { build_sha256: 'f'.repeat(64) },
+    { baseline_executor_artifact_sha256: '8'.repeat(64) },
+    { candidate_executor_artifact_sha256: '8'.repeat(64) },
     { target: { ...TARGET, executionContextId: 8 } },
   ]) {
     let reads = 0;
@@ -134,6 +159,12 @@ test('rejects fewer than 30 pairs without invoking an action', async () => {
     () => createApprovalBoundBenchmarkRunner(config),
     error => error?.code === 'BENCHMARK_INVALID_CONFIGURATION',
   );
+  assert.equal(calls.length, 0);
+});
+
+test('rejects identical baseline and candidate artifacts before any sample', () => {
+  const { config, calls } = fixture({ approval: provenance({ candidate_artifact_sha256: DIGESTS.baseline }) });
+  assert.throws(() => createApprovalBoundBenchmarkRunner(config), error => error.code === 'BENCHMARK_INVALID_CONFIGURATION');
   assert.equal(calls.length, 0);
 });
 

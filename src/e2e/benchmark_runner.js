@@ -4,11 +4,23 @@ const HEX_SHA256 = /^[a-f0-9]{64}$/;
 const HEX_GIT_SHA1 = /^[a-f0-9]{40}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const PROVENANCE_KEYS = Object.freeze([
+  'baseline_artifact_sha256',
+  'baseline_executor_artifact_sha256',
+  'baseline_executor_module_path',
+  'baseline_executor_repository_commit',
+  'baseline_module_path',
+  'baseline_repository_commit',
+  'benchmark_workload_sha256',
   'envelope_sha256',
   'repository_head',
   'working_tree_diff_sha256',
   'test_manifest_sha256',
   'build_sha256',
+  'candidate_artifact_sha256',
+  'candidate_executor_artifact_sha256',
+  'candidate_executor_module_path',
+  'candidate_module_path',
+  'candidate_repository_commit',
   'workload_sha256',
   'target',
 ]);
@@ -77,21 +89,48 @@ function normalizeTarget(value) {
 function normalizeProvenance(value) {
   if (!exactKeys(value, PROVENANCE_KEYS)) throw fail();
   if (!HEX_GIT_SHA1.test(value.repository_head)) throw fail();
+  if (!HEX_GIT_SHA1.test(value.baseline_repository_commit)
+    || !HEX_GIT_SHA1.test(value.baseline_executor_repository_commit)
+    || !HEX_GIT_SHA1.test(value.candidate_repository_commit)
+    || value.baseline_repository_commit === value.candidate_repository_commit
+    || value.baseline_module_path !== 'src/e2e/benchmark/baseline_workload.js'
+    || value.baseline_executor_module_path !== 'src/e2e/benchmark/baseline_executor.js'
+    || value.candidate_executor_module_path !== 'src/e2e/benchmark/candidate_executor.js'
+    || value.candidate_module_path !== 'src/e2e/benchmark/candidate_workload.js') throw fail();
   for (const key of [
+    'baseline_artifact_sha256',
+    'baseline_executor_artifact_sha256',
+    'benchmark_workload_sha256',
     'envelope_sha256',
     'working_tree_diff_sha256',
     'test_manifest_sha256',
     'build_sha256',
+    'candidate_artifact_sha256',
+    'candidate_executor_artifact_sha256',
     'workload_sha256',
   ]) {
     if (!HEX_SHA256.test(value[key])) throw fail();
   }
+  if (value.baseline_artifact_sha256 === value.candidate_artifact_sha256) throw fail();
+  if (value.baseline_executor_artifact_sha256 === value.candidate_executor_artifact_sha256) throw fail();
   return Object.freeze({
+    baseline_artifact_sha256: value.baseline_artifact_sha256,
+    baseline_executor_artifact_sha256: value.baseline_executor_artifact_sha256,
+    baseline_executor_module_path: value.baseline_executor_module_path,
+    baseline_executor_repository_commit: value.baseline_executor_repository_commit,
+    baseline_module_path: value.baseline_module_path,
+    baseline_repository_commit: value.baseline_repository_commit,
+    benchmark_workload_sha256: value.benchmark_workload_sha256,
     envelope_sha256: value.envelope_sha256,
     repository_head: value.repository_head,
     working_tree_diff_sha256: value.working_tree_diff_sha256,
     test_manifest_sha256: value.test_manifest_sha256,
     build_sha256: value.build_sha256,
+    candidate_artifact_sha256: value.candidate_artifact_sha256,
+    candidate_executor_artifact_sha256: value.candidate_executor_artifact_sha256,
+    candidate_executor_module_path: value.candidate_executor_module_path,
+    candidate_module_path: value.candidate_module_path,
+    candidate_repository_commit: value.candidate_repository_commit,
     workload_sha256: value.workload_sha256,
     target: normalizeTarget(value.target),
   });
@@ -100,7 +139,7 @@ function normalizeProvenance(value) {
 function sameProvenance(actual, expected) {
   try {
     const normalized = normalizeProvenance(actual);
-    return PROVENANCE_KEYS.slice(0, 6).every(key => normalized[key] === expected[key])
+    return PROVENANCE_KEYS.filter(key => key !== 'target').every(key => normalized[key] === expected[key])
       && TARGET_KEYS.every(key => normalized.target[key] === expected.target[key]);
   } catch {
     return false;
@@ -251,11 +290,23 @@ export function createApprovalBoundBenchmarkRunner(configuration) {
       let artifactReceipt;
       try {
         const bindings = Object.freeze({
+          baseline_artifact_sha256: approval.baseline_artifact_sha256,
+          baseline_executor_artifact_sha256: approval.baseline_executor_artifact_sha256,
+          baseline_executor_module_path: approval.baseline_executor_module_path,
+          baseline_executor_repository_commit: approval.baseline_executor_repository_commit,
+          baseline_module_path: approval.baseline_module_path,
+          baseline_repository_commit: approval.baseline_repository_commit,
+          benchmark_workload_sha256: approval.benchmark_workload_sha256,
           envelope_sha256: approval.envelope_sha256,
           repository_head: approval.repository_head,
           working_tree_diff_sha256: approval.working_tree_diff_sha256,
           test_manifest_sha256: approval.test_manifest_sha256,
           build_sha256: approval.build_sha256,
+          candidate_artifact_sha256: approval.candidate_artifact_sha256,
+          candidate_executor_artifact_sha256: approval.candidate_executor_artifact_sha256,
+          candidate_executor_module_path: approval.candidate_executor_module_path,
+          candidate_module_path: approval.candidate_module_path,
+          candidate_repository_commit: approval.candidate_repository_commit,
           workload_sha256: approval.workload_sha256,
         });
         artifactReceipt = await artifactSink.write(Object.freeze({
