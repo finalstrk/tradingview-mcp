@@ -2,7 +2,16 @@ import { z } from 'zod';
 import { jsonResult } from './_format.js';
 import * as core from '../core/data.js';
 
-export function registerDataTools(server) {
+function dataErrorResult(err) {
+  const payload = { success: false, error: err?.message || String(err) };
+  for (const field of ['code', 'source', 'requested_symbol', 'observed_symbol']) {
+    if (err?.[field] !== undefined) payload[field] = err[field];
+  }
+  return jsonResult(payload, true);
+}
+
+export function registerDataTools(server, { core: coreOverride } = {}) {
+  const dataCore = coreOverride ? { ...core, ...coreOverride } : core;
   server.tool('data_get_ohlcv', 'Get OHLCV bar data from the chart. Use summary=true for compact stats instead of all bars (saves context).', {
     count: z.coerce.number().optional().describe('Number of bars to retrieve (max 500, default 100)'),
     summary: z.coerce.boolean().optional().describe('Return summary stats (high, low, open, close, avg volume, range) instead of all bars — much smaller output'),
@@ -19,27 +28,27 @@ export function registerDataTools(server) {
   });
 
   server.tool('data_get_strategy_results', 'Get strategy performance metrics from Strategy Tester', {}, async () => {
-    try { return jsonResult(await core.getStrategyResults()); }
-    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    try { return jsonResult(await dataCore.getStrategyResults()); }
+    catch (err) { return dataErrorResult(err); }
   });
 
   server.tool('data_get_trades', 'Get trade list from Strategy Tester', {
     max_trades: z.coerce.number().optional().describe('Maximum trades to return'),
   }, async ({ max_trades }) => {
-    try { return jsonResult(await core.getTrades({ max_trades })); }
-    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    try { return jsonResult(await dataCore.getTrades({ max_trades })); }
+    catch (err) { return dataErrorResult(err); }
   });
 
   server.tool('data_get_equity', 'Get equity curve data from Strategy Tester', {}, async () => {
-    try { return jsonResult(await core.getEquity()); }
-    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    try { return jsonResult(await dataCore.getEquity()); }
+    catch (err) { return dataErrorResult(err); }
   });
 
   server.tool('quote_get', 'Get real-time quote data for a symbol (price, OHLC, volume)', {
     symbol: z.string().optional().describe('Symbol to quote (blank = current chart symbol)'),
   }, async ({ symbol }) => {
-    try { return jsonResult(await core.getQuote({ symbol })); }
-    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    try { return jsonResult(await dataCore.getQuote({ symbol })); }
+    catch (err) { return dataErrorResult(err); }
   });
 
   server.tool('depth_get', 'Get order book / DOM (Depth of Market) data from the chart', {}, async () => {
