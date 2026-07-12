@@ -13,6 +13,10 @@ const __filename = fileURLToPath(import.meta.url);
 
 const HUMAN_CONFIRMATION_RE = /human|manual|confirm|approval|hitl|人間|手動|確認|承認/i;
 
+function positiveInteger(value) {
+  return Number.isInteger(value) && value > 0;
+}
+
 export const REQUIRED_REQUIREMENTS = [
   {
     id: 'id',
@@ -94,6 +98,91 @@ export const REQUIRED_REQUIREMENTS = [
     category: 'validation',
   },
   {
+    id: 'benchmark',
+    label: 'pre-declared benchmark',
+    paths: [['benchmark'], ['validation', 'benchmark'], ['backtest', 'benchmark']],
+    category: 'validation',
+  },
+  {
+    id: 'candidate_count',
+    label: 'candidate / parameter search count',
+    paths: [['candidate_count'], ['validation', 'candidate_count'], ['search', 'candidate_count']],
+    category: 'overfit_guard',
+    predicate: positiveInteger,
+  },
+  {
+    id: 'in_sample_period',
+    label: 'in-sample period',
+    paths: [['in_sample_period'], ['validation', 'in_sample_period'], ['validation', 'is_period']],
+    category: 'overfit_guard',
+  },
+  {
+    id: 'out_of_sample_period',
+    label: 'out-of-sample period',
+    paths: [['out_of_sample_period'], ['validation', 'out_of_sample_period'], ['validation', 'oos_period']],
+    category: 'overfit_guard',
+  },
+  {
+    id: 'holdout_period',
+    label: 'untouched final holdout period',
+    paths: [['holdout_period'], ['validation', 'holdout_period']],
+    category: 'overfit_guard',
+  },
+  {
+    id: 'parameter_freeze',
+    label: 'parameter-freeze rule before holdout',
+    paths: [['parameter_freeze'], ['validation', 'parameter_freeze'], ['validation', 'freeze_rule']],
+    category: 'overfit_guard',
+  },
+  {
+    id: 'primary_fill_model',
+    label: 'primary fill model',
+    paths: [['primary_fill_model'], ['execution', 'primary_fill_model'], ['execution', 'primary_fill']],
+    category: 'execution',
+  },
+  {
+    id: 'stress_fill_model',
+    label: 'conservative stress fill model',
+    paths: [['stress_fill_model'], ['execution', 'stress_fill_model'], ['execution', 'stress_fill']],
+    category: 'execution',
+  },
+  {
+    id: 'commission',
+    label: 'commission assumption',
+    paths: [['commission'], ['execution', 'commission'], ['costs', 'commission']],
+    category: 'execution',
+  },
+  {
+    id: 'spread',
+    label: 'spread assumption',
+    paths: [['spread'], ['execution', 'spread'], ['costs', 'spread']],
+    category: 'execution',
+  },
+  {
+    id: 'slippage',
+    label: 'slippage assumption',
+    paths: [['slippage'], ['execution', 'slippage'], ['costs', 'slippage']],
+    category: 'execution',
+  },
+  {
+    id: 'top_trade_removal',
+    label: 'top 1% / 5% trade-removal check',
+    paths: [['top_trade_removal'], ['robustness', 'top_trade_removal']],
+    category: 'robustness',
+  },
+  {
+    id: 'regime_splits',
+    label: 'regime-split plan',
+    paths: [['regime_splits'], ['robustness', 'regime_splits']],
+    category: 'robustness',
+  },
+  {
+    id: 'long_short_decomposition',
+    label: 'long / short decomposition',
+    paths: [['long_short_decomposition'], ['robustness', 'long_short_decomposition']],
+    category: 'robustness',
+  },
+  {
     id: 'paper_trade_period',
     label: 'paper-trade period',
     paths: [['paper_trade'], ['paper_trade_period'], ['validation', 'paper_trade_period']],
@@ -143,7 +232,27 @@ export function strategySpecTemplate() {
       max_concurrent_positions: 3,
       kill_switch: ['API/data failure', 'rule drift', 'manual override required'],
     },
-    backtest_period: 'YYYY-MM-DD..YYYY-MM-DD, out-of-sample included',
+    backtest_period: 'YYYY-MM-DD..YYYY-MM-DD, out-of-sample and final holdout included',
+    benchmark: ['buy-and-hold or cash, as applicable', 'simple MA or breakout baseline'],
+    validation: {
+      candidate_count: 1,
+      in_sample_period: 'YYYY-MM-DD..YYYY-MM-DD',
+      out_of_sample_period: 'YYYY-MM-DD..YYYY-MM-DD',
+      holdout_period: 'YYYY-MM-DD..YYYY-MM-DD; never used for LLM/parameter refinement',
+      parameter_freeze: 'Freeze rules and parameters before opening the final holdout.',
+    },
+    execution: {
+      primary_fill_model: 'Current declared model, e.g. bar close or next bar open.',
+      stress_fill_model: 'Next-bar-open or one-bar-delayed fill, whichever is more conservative.',
+      commission: 'Instrument-specific per-side commission, with a higher-cost stress case.',
+      spread: 'Instrument/session-specific spread assumption and stress multiple.',
+      slippage: 'Instrument-specific ticks/bps plus adverse stress case.',
+    },
+    robustness: {
+      top_trade_removal: 'Recompute after removing the largest win and top 1% / 5% winners.',
+      regime_splits: ['trend/range', 'high/low volatility', 'risk-on/risk-off'],
+      long_short_decomposition: 'Report long and short metrics separately; use n/a with reason for long-only systems.',
+    },
     paper_trade_period: 'At least 1-3 months before any small-live discussion',
     review_cadence: 'weekly paper review; monthly parameter review',
     edge_death_condition: ['PF < 1.0 OOS', 'live/paper gap persists', 'regime mismatch'],

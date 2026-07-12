@@ -30,6 +30,14 @@ strategy("DT <Name> v1", overlay=true, initial_capital=1000000,
      slippage=2, process_orders_on_close=true, calc_on_every_tick=false)
 ```
 
+この共通宣言は primary backtest の既定値であり、執行現実性の証明ではありません。paper candidate の検証では、`strategy_spec_check` に次を記録して別シナリオを比較します。
+
+- primary fill model と、翌バー始値または1バー遅延の保守的 stress fill model
+- 対象商品・セッションに合わせた commission / spread / slippage と悪化ケース
+- fill model やコスト前提を変更した場合の PF、DD、trade count、benchmark gap
+
+既存 evidence と比較不能になるため、共通宣言を黙って変更してはいけません。変更は新しい検証runとして記録します。
+
 ## セッション処理（両版共通）
 
 - `input.string` でプリセットを選択する。選択肢は `"Tokyo"` / `"London"` / `"NY"` / `"RTH"` / `"Custom"`。

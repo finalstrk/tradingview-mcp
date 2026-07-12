@@ -43,6 +43,8 @@ describe('strategy spec checker — deterministic gate', () => {
     const spec = strategySpecTemplate();
     delete spec.backtest_period;
     delete spec.paper_trade_period;
+    delete spec.validation.holdout_period;
+    delete spec.execution.stress_fill_model;
 
     const result = checkStrategySpec(spec);
 
@@ -51,6 +53,20 @@ describe('strategy spec checker — deterministic gate', () => {
     assert.deepEqual(result.critical_missing, []);
     assert.ok(result.missing.includes('backtest_period'));
     assert.ok(result.missing.includes('paper_trade_period'));
+    assert.ok(result.missing.includes('holdout_period'));
+    assert.ok(result.missing.includes('stress_fill_model'));
+  });
+
+  it('requires a positive candidate count so parameter search is recorded', () => {
+    const spec = strategySpecTemplate();
+    spec.validation.candidate_count = 0;
+
+    const result = checkStrategySpec(spec);
+
+    assert.equal(result.complete, false);
+    assert.equal(result.next_action, 'research');
+    assert.deepEqual(result.critical_missing, []);
+    assert.ok(result.missing.includes('candidate_count'));
   });
 
   it('normalizes documents with multiple strategies', () => {

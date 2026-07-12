@@ -44,11 +44,18 @@ A strategy candidate needs all of the following before it can even be a paper/re
 10. `risk.daily_loss_limit`
 11. `risk.max_concurrent_positions`
 12. `backtest_period`
-13. `paper_trade_period`
-14. `risk.kill_switch`
-15. `review_cadence`
-16. `edge_death_condition`
-17. `human_confirmation`
+13. pre-declared `benchmark`
+14. `validation.candidate_count`
+15. explicit IS / OOS / untouched final holdout periods
+16. a parameter-freeze rule before opening the holdout
+17. primary and conservative stress fill models
+18. commission / spread / slippage assumptions
+19. top-trade removal, regime splits, and long/short decomposition
+20. `paper_trade_period`
+21. `risk.kill_switch`
+22. `review_cadence`
+23. `edge_death_condition`
+24. `human_confirmation`
 
 Critical missing fields route to `no-action`. Non-critical validation gaps route to `research`. A complete spec routes to `watch` / paper-candidate only — never live execution.
 
@@ -102,7 +109,27 @@ npm run strategy-spec-check -- path/to/spec.json --strict
     "max_concurrent_positions": 3,
     "kill_switch": ["API/data failure", "rule drift", "manual override"]
   },
-  "backtest_period": "YYYY-MM-DD..YYYY-MM-DD, OOS included",
+  "backtest_period": "YYYY-MM-DD..YYYY-MM-DD, OOS and final holdout included",
+  "benchmark": ["buy-and-hold or cash", "simple MA or breakout"],
+  "validation": {
+    "candidate_count": 1,
+    "in_sample_period": "YYYY-MM-DD..YYYY-MM-DD",
+    "out_of_sample_period": "YYYY-MM-DD..YYYY-MM-DD",
+    "holdout_period": "YYYY-MM-DD..YYYY-MM-DD; untouched by refinement",
+    "parameter_freeze": "Freeze rules and parameters before opening holdout."
+  },
+  "execution": {
+    "primary_fill_model": "Declared production-like fill assumption",
+    "stress_fill_model": "Next-bar-open or one-bar-delayed fill",
+    "commission": "Per-side instrument-specific cost plus stress case",
+    "spread": "Instrument/session assumption plus stress multiple",
+    "slippage": "Ticks/bps assumption plus adverse stress case"
+  },
+  "robustness": {
+    "top_trade_removal": "Remove largest win and top 1% / 5% winners",
+    "regime_splits": ["trend/range", "high/low volatility", "risk-on/risk-off"],
+    "long_short_decomposition": "Report separately or n/a with reason"
+  },
   "paper_trade_period": "At least 1-3 months",
   "review_cadence": "weekly paper review; monthly parameter review",
   "edge_death_condition": ["PF < 1.0 OOS", "live/paper gap persists"],
@@ -112,6 +139,14 @@ npm run strategy-spec-check -- path/to/spec.json --strict
   }
 }
 ```
+
+## AI-assisted refinement rule
+
+- LLMs may translate rules, scaffold Pine code, explain failed trades, and propose one-variable research hypotheses.
+- Every strategy, timeframe, market, filter, and parameter variant inspected counts toward `candidate_count`.
+- Once OOS or holdout output has influenced a rule change, that period is consumed and cannot be called untouched OOS/holdout again.
+- Exporting a TradingView CSV and repeatedly asking an LLM to improve the same history is optimization, not independent validation.
+- A dollar P&L headline is never promotion evidence by itself. Preserve return, drawdown, trade count, benchmark gap, cost assumptions, and top-trade dependence.
 
 ## Relationship to daily review
 

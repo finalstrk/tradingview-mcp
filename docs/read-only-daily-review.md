@@ -101,6 +101,8 @@ human decision only
 - Any new strategy idea must pass `strategy_spec_check` before it can be treated as a paper/review candidate.
 - Missing entry, take-profit, stop-loss, position sizing, or human confirmation routes the idea to `no-action`.
 - Missing validation/risk cadence routes the idea to `research`, not `act`.
+- Missing candidate count, IS/OOS/final holdout boundaries, parameter freeze, execution-cost stress, or robustness checks also routes the idea to `research`.
+- LLM refinement may propose a new hypothesis, but it must not reuse a consumed OOS/holdout period as fresh evidence.
 
 ## Strategy minimum spec gate
 
