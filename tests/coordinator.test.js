@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,8 @@ import {
   LIVE_CASE_REGISTRY,
   LIVE_CASE_REGISTRY_SHA256,
   acquireGateBLease,
+  activateGateBFromApprovalFile,
+  buildLiveChildEnvironment,
   buildGateBApprovalDraft,
   buildSafeStop,
   digestJson,
@@ -49,6 +51,11 @@ function expectedBindings(envelope) {
 async function withTempState(run) {
   const root = await mkdtemp(join(tmpdir(), 'tradingview-gate-b-'));
   try { return await run(join(root, 'state')); } finally { await rm(root, { recursive: true, force: true }); }
+}
+
+async function writeApproval(path, nonce, envelope, mode = 0o600) {
+  await writeFile(path, `${JSON.stringify({ schema_version: 1, envelope, nonce })}\n`, { mode });
+  await chmod(path, mode);
 }
 
 test('normal invocation plans only offline checks and no external actions', () => {
@@ -136,7 +143,7 @@ test('approval draft binds the fixed command, budgets, registry and its own dige
   assert.deepEqual(envelope.external_action_budgets, GATE_B_BUDGETS);
   assert.equal(envelope.live_case_registry_sha256, LIVE_CASE_REGISTRY_SHA256);
   assert.equal(envelope.envelope_sha256, digestJson(unsigned));
-  assert.equal(envelope.live_adapter_dispatch, 'DISABLED_PENDING_FRESH_GATE_B_APPROVAL');
+  assert.equal(envelope.live_adapter_dispatch, 'INJECTED_REVIEWED_ADAPTER_ONLY');
 });
 
 test('approval validation rejects digest mismatch, changed binding and expiration', () => {
@@ -314,4 +321,137 @@ test('release refuses a stale ownership token and preserves the active lock', as
     );
     assert.equal(await readFile(join(stateDir, 'active.lock', 'owner'), 'utf8'), 'other-owner');
   });
+});
+
+test('secure approval-file ingress persists the lease before exposing an injected live plan', async () => {
+  await withTempState(async stateDir => {
+    const nonce = 'a'.repeat(64);
+    const envelope = approvalDraft({ nonce });
+    const approvalPath = join(stateDir, '..', 'approval.json');
+    await writeApproval(approvalPath, nonce, envelope);
+    const expected = expectedBindings(envelope);
+    const events = [];
+    const result = await activateGateBFromApprovalFile({
+      approvalFilePath: approvalPath,
+      stateDir,
+      nowMs: Date.UTC(2030, 0, 1),
+      measureBindings: async () => ({ ...expected }),
+      liveAdapter: async plan => {
+        events.push('adapter');
+        assert.equal(await readFile(plan.lease.spentPath, 'utf8').then(Boolean), true);
+        assert.equal(await readFile(join(stateDir, 'active.lock', 'owner'), 'utf8').then(Boolean), true);
+        assert.equal(Object.hasOwn(plan, 'nonce'), false);
+        return { status: 'ready' };
+      },
+    });
+    assert.deepEqual(events, ['adapter']);
+    assert.deepEqual(result.adapter_result, { status: 'ready' });
+    assert.equal(result.phase, 'live_plan_dispatched');
+    await releaseGateBLease(result.lease);
+  });
+});
+
+test('approval-file ingress rejects missing, symlink, unsafe mode, malformed and extra fields before state', async () => {
+  await withTempState(async stateDir => {
+    const root = join(stateDir, '..');
+    const expected = expectedBindings(approvalDraft());
+    const common = { stateDir, measureBindings: async () => expected, liveAdapter: async () => ({}) };
+    await assert.rejects(
+      activateGateBFromApprovalFile({ ...common, approvalFilePath: join(root, 'missing.json') }),
+      error => error?.code === 'GATE_B_APPROVAL_FILE_UNAVAILABLE',
+    );
+
+    const nonce = 'b'.repeat(64);
+    const envelope = approvalDraft({ nonce });
+    const real = join(root, 'real.json');
+    await writeApproval(real, nonce, envelope);
+    const link = join(root, 'link.json');
+    await symlink(real, link);
+    await assert.rejects(
+      activateGateBFromApprovalFile({ ...common, approvalFilePath: link }),
+      error => error?.code === 'GATE_B_APPROVAL_FILE_UNSAFE',
+    );
+
+    const unsafe = join(root, 'unsafe.json');
+    await writeApproval(unsafe, nonce, envelope, 0o640);
+    await assert.rejects(
+      activateGateBFromApprovalFile({ ...common, approvalFilePath: unsafe }),
+      error => error?.code === 'GATE_B_APPROVAL_FILE_UNSAFE',
+    );
+
+    for (const [name, value] of [
+      ['malformed', '{x'],
+      ['extra', JSON.stringify({ schema_version: 1, envelope, nonce, extra: true })],
+    ]) {
+      const path = join(root, `${name}.json`);
+      await writeFile(path, value, { mode: 0o600 });
+      await assert.rejects(
+        activateGateBFromApprovalFile({ ...common, approvalFilePath: path }),
+        error => error?.code === 'GATE_B_APPROVAL_FILE_INVALID',
+      );
+    }
+    await assert.rejects(readFile(join(stateDir, 'active.lock', 'owner')), error => error?.code === 'ENOENT');
+  });
+});
+
+test('activation rejects expired, digest mismatch, measurement drift and absent adapter without dispatch', async () => {
+  await withTempState(async stateDir => {
+    const nonce = 'c'.repeat(64);
+    const root = join(stateDir, '..');
+    const calls = [];
+    async function attempt(name, envelope, options = {}) {
+      const path = join(root, `${name}.json`);
+      await writeApproval(path, nonce, envelope);
+      return activateGateBFromApprovalFile({
+        approvalFilePath: path,
+        stateDir,
+        nowMs: options.nowMs ?? Date.UTC(2030, 0, 1),
+        measureBindings: options.measureBindings || (async () => expectedBindings(envelope)),
+        liveAdapter: options.hasOwnProperty('liveAdapter') ? options.liveAdapter : async () => { calls.push(name); },
+      });
+    }
+    await assert.rejects(attempt('expired', approvalDraft({ nonce, expiresAt: '2029-01-01T00:00:00.000Z' })), e => e?.code === 'GATE_B_APPROVAL_EXPIRED');
+    const valid = approvalDraft({ nonce });
+    await assert.rejects(attempt('digest', { ...valid, envelope_sha256: '0'.repeat(64) }), e => e?.code === 'GATE_B_ENVELOPE_DIGEST_MISMATCH');
+    let measurements = 0;
+    await assert.rejects(attempt('drift', valid, {
+      measureBindings: async () => ({ ...expectedBindings(valid), repository_head: (++measurements === 1 ? valid.repository_head : 'f'.repeat(40)) }),
+    }), e => e?.code === 'GATE_B_MEASUREMENT_DRIFT');
+    await assert.rejects(attempt('no-adapter', valid, { liveAdapter: null }), e => e?.code === 'GATE_B_LIVE_ADAPTER_UNAVAILABLE');
+    assert.deepEqual(calls, []);
+  });
+});
+
+test('TOCTOU drift spends no nonce while adapter failure leaves spent and crash lock durable', async () => {
+  await withTempState(async stateDir => {
+    const nonce = 'd'.repeat(64);
+    const envelope = approvalDraft({ nonce });
+    const approvalPath = join(stateDir, '..', 'approval.json');
+    await writeApproval(approvalPath, nonce, envelope);
+    await assert.rejects(
+      activateGateBFromApprovalFile({
+        approvalFilePath: approvalPath,
+        stateDir,
+        measureBindings: async () => expectedBindings(envelope),
+        liveAdapter: async () => { throw new Error('simulated crash'); },
+      }),
+      error => error?.code === 'GATE_B_LIVE_ADAPTER_FAILED',
+    );
+    assert.equal(await readFile(join(stateDir, 'active.lock', 'owner'), 'utf8').then(Boolean), true);
+    assert.equal(await readFile(join(stateDir, 'spent', `${sha256(nonce)}.json`), 'utf8').then(Boolean), true);
+  });
+});
+
+test('live child environment strips approval secrets and coordinator-only controls', () => {
+  const nonce = 'e'.repeat(64);
+  const env = buildLiveChildEnvironment({
+    PATH: '/bin',
+    GATE_B_APPROVAL_FILE: '/secret/approval.json',
+    GATE_B_APPROVAL_NONCE: nonce,
+    APPROVAL_NONCE: nonce,
+    SAFE_VALUE: 'ok',
+    INNOCENT_NAME: `prefix-${nonce}`,
+  }, [nonce]);
+  assert.deepEqual(env, { PATH: '/bin', SAFE_VALUE: 'ok', TRADINGVIEW_MCP_COORDINATOR_MODE: 'live-child' });
+  assert.doesNotMatch(JSON.stringify(env), new RegExp(nonce));
 });

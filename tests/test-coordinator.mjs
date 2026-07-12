@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { constants as FS_CONSTANTS } from 'node:fs';
 import { mkdir, open, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,7 +112,7 @@ export function buildGateBApprovalDraft({
     external_action_budgets: GATE_B_BUDGETS,
     full_command: GATE_B_COMMAND,
     expires_at: expiresAt,
-    live_adapter_dispatch: 'DISABLED_PENDING_FRESH_GATE_B_APPROVAL',
+    live_adapter_dispatch: 'INJECTED_REVIEWED_ADAPTER_ONLY',
   };
   return { ...draft, envelope_sha256: digestJson(draft) };
 }
@@ -182,7 +183,7 @@ export function validateGateBApproval(envelope, expected, nowMs = Date.now()) {
   if (envelope.live_case_registry_sha256 !== LIVE_CASE_REGISTRY_SHA256) {
     throw new GateBError('GATE_B_REGISTRY_DIGEST_MISMATCH');
   }
-  if (envelope.live_adapter_dispatch !== 'DISABLED_PENDING_FRESH_GATE_B_APPROVAL') {
+  if (envelope.live_adapter_dispatch !== 'INJECTED_REVIEWED_ADAPTER_ONLY') {
     throw new GateBError('GATE_B_LIVE_DISPATCH_DISABLED');
   }
   return true;
@@ -276,6 +277,146 @@ export async function prepareGateBLease({
 
 export async function releaseGateBLease(lease) {
   await removeOwnedLock(lease.stateDir, lease.ownershipToken);
+}
+
+const APPROVAL_FILE_KEYS = Object.freeze(['envelope', 'nonce', 'schema_version']);
+const APPROVAL_FILE_MAX_BYTES = 64 * 1024;
+const SECRET_ENV_KEY = /(?:^|_)(?:APPROVAL|NONCE|SECRET|TOKEN)(?:_|$)|^GATE_B_/i;
+
+function exactKeys(value, expectedKeys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value).sort();
+  return keys.length === expectedKeys.length && keys.every((key, index) => key === expectedKeys[index]);
+}
+
+async function readSecureApprovalFile(approvalFilePath) {
+  if (typeof approvalFilePath !== 'string' || approvalFilePath.length === 0) {
+    throw new GateBError('GATE_B_APPROVAL_FILE_UNAVAILABLE');
+  }
+  let handle;
+  try {
+    handle = await open(approvalFilePath, FS_CONSTANTS.O_RDONLY | FS_CONSTANTS.O_NOFOLLOW);
+  } catch (error) {
+    if (error?.code === 'ELOOP') throw new GateBError('GATE_B_APPROVAL_FILE_UNSAFE');
+    throw new GateBError('GATE_B_APPROVAL_FILE_UNAVAILABLE');
+  }
+  try {
+    const stat = await handle.stat();
+    const expectedUid = typeof process.getuid === 'function' ? process.getuid() : stat.uid;
+    if (
+      !stat.isFile()
+      || stat.nlink !== 1
+      || stat.uid !== expectedUid
+      || (stat.mode & 0o777) !== 0o600
+      || stat.size < 2
+      || stat.size > APPROVAL_FILE_MAX_BYTES
+    ) {
+      throw new GateBError('GATE_B_APPROVAL_FILE_UNSAFE');
+    }
+    const bytes = Buffer.alloc(stat.size);
+    const { bytesRead } = await handle.read(bytes, 0, stat.size, 0);
+    if (bytesRead !== stat.size) throw new GateBError('GATE_B_APPROVAL_FILE_UNSAFE');
+    const after = await handle.stat();
+    if (
+      after.dev !== stat.dev
+      || after.ino !== stat.ino
+      || after.size !== stat.size
+      || after.mtimeMs !== stat.mtimeMs
+      || after.ctimeMs !== stat.ctimeMs
+    ) {
+      throw new GateBError('GATE_B_APPROVAL_FILE_TOCTOU');
+    }
+    let approval;
+    try { approval = JSON.parse(bytes.toString('utf8')); } catch {
+      throw new GateBError('GATE_B_APPROVAL_FILE_INVALID');
+    }
+    if (
+      !exactKeys(approval, APPROVAL_FILE_KEYS)
+      || approval.schema_version !== GATE_B_SCHEMA_VERSION
+      || typeof approval.nonce !== 'string'
+      || !/^[a-f0-9]{64}$/.test(approval.nonce)
+    ) {
+      throw new GateBError('GATE_B_APPROVAL_FILE_INVALID');
+    }
+    return approval;
+  } finally {
+    await handle.close();
+  }
+}
+
+export function buildLiveChildEnvironment(source = process.env, forbiddenValues = []) {
+  const result = {};
+  for (const [key, value] of Object.entries(source || {})) {
+    if (
+      !SECRET_ENV_KEY.test(key)
+      && typeof value === 'string'
+      && !forbiddenValues.some(secret => typeof secret === 'string' && secret.length > 0 && value.includes(secret))
+    ) result[key] = value;
+  }
+  result.TRADINGVIEW_MCP_COORDINATOR_MODE = 'live-child';
+  delete result.TRADINGVIEW_MCP_LIVE_DISABLED;
+  return Object.freeze(result);
+}
+
+/**
+ * Consume a securely-delivered approval and transition to an injected live
+ * adapter only after current bindings are measured twice and the global lease
+ * has been made durable. The nonce is deliberately omitted from the plan.
+ */
+export async function activateGateBFromApprovalFile({
+  approvalFilePath,
+  stateDir,
+  measureBindings,
+  liveAdapter,
+  nowMs = Date.now(),
+  ownershipToken,
+} = {}) {
+  if (typeof measureBindings !== 'function') throw new GateBError('GATE_B_MEASUREMENT_UNAVAILABLE');
+  if (typeof liveAdapter !== 'function') throw new GateBError('GATE_B_LIVE_ADAPTER_UNAVAILABLE');
+
+  const approval = await readSecureApprovalFile(approvalFilePath);
+  let first;
+  let second;
+  try { first = await measureBindings(); } catch { throw new GateBError('GATE_B_MEASUREMENT_FAILED'); }
+  validateGateBApproval(approval.envelope, {
+    ...first,
+    approval_nonce_sha256: sha256(approval.nonce),
+  }, nowMs);
+  try { second = await measureBindings(); } catch { throw new GateBError('GATE_B_MEASUREMENT_FAILED'); }
+  if (digestJson(first) !== digestJson(second)) throw new GateBError('GATE_B_MEASUREMENT_DRIFT');
+  validateGateBApproval(approval.envelope, {
+    ...second,
+    approval_nonce_sha256: sha256(approval.nonce),
+  }, nowMs);
+
+  const lease = await acquireGateBLease({
+    stateDir,
+    nonce: approval.nonce,
+    envelope: approval.envelope,
+    expected: second,
+    nowMs,
+    ownershipToken,
+  });
+  const plan = Object.freeze({
+    phase: 'live_plan_ready',
+    lease,
+    envelope_sha256: approval.envelope.envelope_sha256,
+    target_policy: Object.freeze({ ...approval.envelope.target_policy }),
+    external_action_budgets: GATE_B_BUDGETS,
+    child_env: buildLiveChildEnvironment(process.env, [approval.nonce]),
+  });
+  try {
+    const adapterResult = await liveAdapter(plan);
+    return Object.freeze({
+      phase: 'live_plan_dispatched',
+      lease,
+      adapter_result: adapterResult,
+    });
+  } catch {
+    // Never release on an unknown dispatch outcome. The durable lock and spent
+    // marker force explicit read-only incident review before another attempt.
+    throw new GateBError('GATE_B_LIVE_ADAPTER_FAILED');
+  }
 }
 
 const OFFLINE_SPECS = Object.freeze([
