@@ -20,7 +20,7 @@ Last updated: 2026-07-12
   accepted P1 paths.
 - Gate A0 Pine discovery is implemented and independently Approved. The
   offline spec is 157/157 on three consecutive runs; the original unit gate
-  was 269/269 and the latest repository unit gate is 279/279. The frozen
+  was 269/269 and the latest repository unit gate is 294/294. The frozen
   artifact digest is
   `0400ce7e163bc475f2a68609551754fe4530f67062ba87ca6e0e3cb25d5d9125`.
 - Gate A1 was attempted once. The exact command, target tuple, budgets, and
@@ -52,6 +52,17 @@ Last updated: 2026-07-12
   `1180bef` makes bounded daily-review output always disconnect the shared CDP
   client. Both remain paper/read-only boundaries and do not authorize live
   trading or A1 operations.
+- The strategy false-positive review was closed by `841eaf6` and `fde9022`:
+  placeholder prose is rejected, ISO IS/OOS/holdout ranges must be ordered
+  and non-overlapping, semantic cost/fill/robustness predicates are required,
+  and aliases are selected by valid predicates.
+- The coordinator boundary was implemented in `d56636e`: `npm test`,
+  `test:e2e`, `test:all`, and broad helpers route through one coordinator;
+  without a fresh approval nonce they run offline unit/manifest checks and
+  emit a fixed `OFFLINE_APPROVAL_REQUIRED` zero-action ledger.
+- Final minor hardening commits `9bcd9e9`, `3e487ab`, and `6aff2aa` cover
+  report disconnect failures, validate direct TradingView probe identity and
+  port inputs, and bound never-settling custom stream fetchers.
 - Gate B/full live E2E and the final broad review remain pending. No `npm test`,
   additional live CRI/CDP operation, TradingView/UI mutation, network POST,
   save, reload, tab/process operation, or Gate A1 retry was run in this stream.
@@ -141,6 +152,8 @@ Last updated: 2026-07-12
 - 2026-07-12: Re-ran focused `connection`, `raw_command`, and `health_launch` tests: 46/46 passed.
 - 2026-07-12: Re-ran `npm run test:unit` after post-review remediation: 277/277 tests passed, 37 suites, fail/cancelled/skipped 0.
 - 2026-07-12: Validated preserved strategy/daily-review changes with focused 9/9 tests and `npm run test:unit` 279/279, 37 suites, fail/cancelled/skipped 0.
+- 2026-07-12: Validated strategy hardening (11/11), coordinator/manifest (17/17), and `npm test` safe-stop (`external_action_count=0`, live=false).
+- 2026-07-12: Validated final minor hardening with focused 26/26 tests and `npm run test:unit` 294/294, 37 suites, fail/cancelled/skipped 0.
 - 2026-07-08: Launched TradingView Desktop with `HOME=/home/yukio` and CDP port 9222, then repaired current Linux/TradingView-build E2E drift: Linux binary path detection, visible-range assertion, bottom widget close fallback, and replay-stop cleanup.
 - 2026-07-08: Ran targeted E2E for `tv_launch|chart_set_visible_range|ui_open_panel|replay_stop`; 4/4 passed.
 - 2026-07-08: Ran full `npm run test`; 95/95 tests passed.
