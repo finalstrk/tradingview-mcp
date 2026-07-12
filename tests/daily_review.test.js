@@ -94,4 +94,41 @@ describe('daily review — markdown report', () => {
     assert.equal(disconnectCalls, 1);
     assert.deepEqual(JSON.parse(writes.join('')), payload);
   });
+
+  it('disconnects once when collection fails before a report is written', async () => {
+    let disconnectCalls = 0;
+
+    await assert.rejects(
+      runDailyReview({ json: true, out: null }, {
+        collectDailyReview: async () => {
+          throw new Error('collection failed');
+        },
+        disconnect: async () => { disconnectCalls += 1; },
+        stdout: { write: () => {} },
+      }),
+      /collection failed/,
+    );
+
+    assert.equal(disconnectCalls, 1);
+  });
+
+  it('disconnects once when report output fails after collection', async () => {
+    let disconnectCalls = 0;
+    const payload = { generated_at: '2026-07-07T01:23:45.000Z', mode: 'read-only' };
+
+    await assert.rejects(
+      runDailyReview({ json: true, out: 'daily.json' }, {
+        collectDailyReview: async () => payload,
+        writeFile: async () => {
+          throw new Error('write failed');
+        },
+        disconnect: async () => { disconnectCalls += 1; },
+        cwd: '/tmp',
+        stdout: { write: () => {} },
+      }),
+      /write failed/,
+    );
+
+    assert.equal(disconnectCalls, 1);
+  });
 });
