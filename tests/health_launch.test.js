@@ -65,6 +65,54 @@ function assertFailure(result, phase, oldProcessKilled = false) {
 }
 
 describe('health launch — bounded CDP probe', () => {
+  it('fails closed before opening HTTP for invalid, non-integer, or out-of-range ports', async () => {
+    let requests = 0;
+    const deps = {
+      httpGet: () => {
+        requests += 1;
+        throw new Error('invalid port must not reach HTTP');
+      },
+    };
+
+    for (const port of [0, -1, 65536, 9222.5, Number.NaN, '9222']) {
+      assert.equal(
+        await health.probeCdpEndpoint({ port, _deps: deps }),
+        null,
+        `port ${String(port)} must fail closed`,
+      );
+    }
+    assert.equal(requests, 0);
+  });
+
+  it('only accepts a TradingView Browser identity with a websocket debugger URL', async () => {
+    const probe = async body => {
+      const response = new EventEmitter();
+      response.statusCode = 200;
+      const request = new EventEmitter();
+      request.setTimeout = () => request;
+      request.destroy = () => {};
+      return health.probeCdpEndpoint({
+        port: 9222,
+        timeout_ms: 100,
+        _deps: {
+          httpGet: (_url, onResponse) => {
+            queueMicrotask(() => {
+              onResponse(response);
+              response.emit('data', JSON.stringify(body));
+              response.emit('end');
+            });
+            return request;
+          },
+        },
+      });
+    };
+
+    assert.equal((await probe({ Browser: 'tradingview/Desktop', webSocketDebuggerUrl: 'ws://localhost:9222/devtools/browser/test' })).Browser, 'tradingview/Desktop');
+    assert.equal(await probe({ Browser: 'Chrome/128.0', webSocketDebuggerUrl: 'ws://localhost:9222/devtools/browser/test' }), null);
+    assert.equal(await probe({ Browser: 'TradingView/Desktop' }), null);
+    assert.equal(await probe({ Browser: 123, webSocketDebuggerUrl: 'ws://localhost:9222/devtools/browser/test' }), null);
+  });
+
   it('destroys a readiness response that never ends and settles within its deadline', async () => {
     assert.equal(typeof health.probeCdpEndpoint, 'function', 'probeCdpEndpoint must be exported');
 

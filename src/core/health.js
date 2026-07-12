@@ -12,6 +12,8 @@ const DEFAULT_POLL_INTERVAL = 1000;
 const DEFAULT_HANDOFF_GRACE = 3000;
 
 export async function probeCdpEndpoint({ port = 9222, timeout_ms = DEFAULT_PROBE_TIMEOUT, signal, _deps } = {}) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+
   const get = _deps?.httpGet || httpGet;
   const schedule = _deps?.setTimeout || setTimeout;
   const cancel = _deps?.clearTimeout || clearTimeout;
@@ -54,7 +56,11 @@ export async function probeCdpEndpoint({ port = 9222, timeout_ms = DEFAULT_PROBE
         response.on('end', () => {
           try {
             const info = JSON.parse(data);
-            finish(response.statusCode === 200 && info?.Browser && info?.webSocketDebuggerUrl ? info : null);
+            const browser = typeof info?.Browser === 'string' ? info.Browser : '';
+            const debuggerUrl = info?.webSocketDebuggerUrl;
+            const isTradingView = browser.toLowerCase().includes('tradingview');
+            const hasDebuggerUrl = typeof debuggerUrl === 'string' && debuggerUrl.trim().length > 0;
+            finish(response.statusCode === 200 && isTradingView && hasDebuggerUrl ? info : null);
           } catch {
             finish(null);
           }
