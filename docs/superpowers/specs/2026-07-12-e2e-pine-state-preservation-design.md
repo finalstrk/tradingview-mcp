@@ -1,6 +1,7 @@
 # Full E2E / Pine 状態保全設計
 
-Status: Phase 0a complete; Gate A0 approved and frozen; Gate A1 pending user approval
+Status: Phase 0a complete; Gate A0 approved and frozen; Gate A1 attempted once;
+evidence integrated; new close-strategy approval required
 
 Date: 2026-07-12
 

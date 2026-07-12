@@ -32,6 +32,13 @@ Last updated: 2026-07-12
   `hideWidget('pine-editor')` is currently non-callable. The open failure is
   therefore classified as `THROW_OR_POST_OPEN_VISIBILITY_UNPROVEN` until a
   separately approved diagnostic can distinguish the two without reopening.
+- Gate A1 evidence was independently integrated into
+  `docs/superpowers/plans/2026-07-12-gate-a1-evidence-integration.md`.
+  The safe next issues are P1-07 close-capability fail-closed preflight,
+  P1-08 open-stage result classification, P1-09 closed-editor read-only
+  boundary, and P1-10 a new close-strategy approval artifact. These are
+  offline-first and require a new implementation/design approval; the old
+  A1 nonce cannot be reused.
 - Gate B/full live E2E and the final broad review remain pending. No `npm test`,
   additional live CRI/CDP operation, TradingView/UI mutation, network POST,
   save, reload, tab/process operation, or Gate A1 retry was run in this stream.
