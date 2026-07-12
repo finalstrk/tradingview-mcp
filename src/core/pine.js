@@ -3,7 +3,7 @@
  * All functions accept plain options objects and return plain JS objects.
  * They throw on error (callers catch and format).
  */
-import { evaluate, evaluateAsync, getClient } from '../connection.js';
+import { evaluate, evaluateAsync, sendCdpCommand } from '../connection.js';
 
 // ── Monaco finder (injected into TV page) ──
 const FIND_MONACO = `
@@ -35,17 +35,60 @@ const FIND_MONACO = `
   })()
 `;
 
+let pinePageOperationSequence = 0;
+
+/**
+ * Wrap page-side async work in an operation-scoped AbortController.
+ * The returned cancellation expression can be sent as a separate CDP command.
+ */
+export function createPinePageOperation(body, operationId) {
+  const resolvedId = operationId || `pine-${Date.now()}-${++pinePageOperationSequence}`;
+  const key = JSON.stringify(resolvedId);
+  return {
+    expression: `
+      (function() {
+        var controllers = window.__tradingviewMcpAbortControllers;
+        if (!controllers) {
+          controllers = new Map();
+          window.__tradingviewMcpAbortControllers = controllers;
+        }
+        var key = ${key};
+        var controller = new AbortController();
+        controllers.set(key, controller);
+        return (async function(controller) {
+          ${body}
+        })(controller).finally(function() {
+          controllers.delete(key);
+        });
+      })()
+    `,
+    cancelExpression: `
+      (function() {
+        var controllers = window.__tradingviewMcpAbortControllers;
+        if (!controllers) return false;
+        var key = ${key};
+        var controller = controllers.get(key);
+        if (!controller) return false;
+        controller.abort();
+        controllers.delete(key);
+        return true;
+      })()
+    `,
+  };
+}
+
 /**
  * Opens the Pine Editor panel and waits for Monaco to become available.
  * Returns true if editor is accessible, false on timeout.
  */
-export async function ensurePineEditorOpen() {
+export async function ensurePineEditorOpen({ signal, timeoutMs, deadline } = {}) {
+  const evaluateOptions = { signal, timeoutMs, deadline };
   const already = await evaluate(`
     (function() {
       var m = ${FIND_MONACO};
       return m !== null;
     })()
-  `);
+  `, evaluateOptions);
   if (already) return true;
 
   await evaluate(`
@@ -55,7 +98,7 @@ export async function ensurePineEditorOpen() {
       if (typeof bwb.activateScriptEditorTab === 'function') bwb.activateScriptEditorTab();
       else if (typeof bwb.showWidget === 'function') bwb.showWidget('pine-editor');
     })()
-  `);
+  `, evaluateOptions);
 
   await evaluate(`
     (function() {
@@ -63,14 +106,34 @@ export async function ensurePineEditorOpen() {
         || document.querySelector('[data-name="pine-dialog-button"]');
       if (btn) btn.click();
     })()
-  `);
+  `, evaluateOptions);
 
   for (let i = 0; i < 50; i++) {
-    await new Promise(r => setTimeout(r, 200));
-    const ready = await evaluate(`(function() { return ${FIND_MONACO} !== null; })()`);
+    await abortableDelay(200, signal);
+    const ready = await evaluate(`(function() { return ${FIND_MONACO} !== null; })()`, evaluateOptions);
     if (ready) return true;
   }
   return false;
+}
+
+function abortableDelay(ms, signal) {
+  if (signal?.aborted) return Promise.reject(signal.reason || new Error('Pine operation aborted'));
+  return new Promise((resolve, reject) => {
+    let timer;
+    const cleanup = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason || new Error('Pine operation aborted'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+  });
 }
 
 // ── Pure / offline functions ──
@@ -281,8 +344,9 @@ export async function setSource({ source }) {
   return { success: true, lines_set: source.split('\n').length };
 }
 
-export async function compile() {
-  const editorReady = await ensurePineEditorOpen();
+export async function compile({ signal, timeoutMs, deadline } = {}) {
+  const commandOptions = { signal, timeoutMs, deadline };
+  const editorReady = await ensurePineEditorOpen(commandOptions);
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const clicked = await evaluate(`
@@ -307,15 +371,24 @@ export async function compile() {
       if (saveBtn) { saveBtn.click(); return 'Pine Save'; }
       return null;
     })()
-  `);
+  `, commandOptions);
 
   if (!clicked) {
-    const c = await getClient();
-    await c.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 2, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
-    await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter' });
+    await sendCdpCommand(
+      'Input',
+      'dispatchKeyEvent',
+      { type: 'keyDown', modifiers: 2, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 },
+      commandOptions,
+    );
+    await sendCdpCommand(
+      'Input',
+      'dispatchKeyEvent',
+      { type: 'keyUp', key: 'Enter', code: 'Enter' },
+      commandOptions,
+    );
   }
 
-  await new Promise(r => setTimeout(r, 2000));
+  await abortableDelay(2000, signal);
   return { success: true, button_clicked: clicked || 'keyboard_shortcut', source: 'dom_fallback' };
 }
 
@@ -344,14 +417,24 @@ export async function getErrors() {
   };
 }
 
-export async function save() {
-  const editorReady = await ensurePineEditorOpen();
+export async function save({ signal, timeoutMs, deadline } = {}) {
+  const commandOptions = { signal, timeoutMs, deadline };
+  const editorReady = await ensurePineEditorOpen(commandOptions);
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
-  const c = await getClient();
-  await c.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 2, key: 's', code: 'KeyS', windowsVirtualKeyCode: 83 });
-  await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 's', code: 'KeyS' });
-  await new Promise(r => setTimeout(r, 800));
+  await sendCdpCommand(
+    'Input',
+    'dispatchKeyEvent',
+    { type: 'keyDown', modifiers: 2, key: 's', code: 'KeyS', windowsVirtualKeyCode: 83 },
+    commandOptions,
+  );
+  await sendCdpCommand(
+    'Input',
+    'dispatchKeyEvent',
+    { type: 'keyUp', key: 's', code: 'KeyS' },
+    commandOptions,
+  );
+  await abortableDelay(800, signal);
 
   // Handle "Save Script" name dialog that appears for new/unsaved scripts
   const dialogHandled = await evaluate(`
@@ -369,9 +452,9 @@ export async function save() {
       if (saveBtn) { saveBtn.click(); return true; }
       return false;
     })()
-  `);
+  `, commandOptions);
 
-  if (dialogHandled) await new Promise(r => setTimeout(r, 500));
+  if (dialogHandled) await abortableDelay(500, signal);
 
   return { success: true, action: dialogHandled ? 'saved_with_dialog' : 'Ctrl+S_dispatched' };
 }
@@ -426,8 +509,9 @@ export async function getConsole() {
   return { success: true, entries: entries || [], entry_count: entries?.length || 0 };
 }
 
-export async function smartCompile() {
-  const editorReady = await ensurePineEditorOpen();
+export async function smartCompile({ signal, timeoutMs, deadline } = {}) {
+  const commandOptions = { signal, timeoutMs, deadline };
+  const editorReady = await ensurePineEditorOpen(commandOptions);
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const studiesBefore = await evaluate(`
@@ -438,7 +522,7 @@ export async function smartCompile() {
       } catch(e) {}
       return null;
     })()
-  `);
+  `, commandOptions);
 
   const buttonClicked = await evaluate(`
     (function() {
@@ -461,15 +545,24 @@ export async function smartCompile() {
       if (saveBtn) { saveBtn.click(); return 'Pine Save'; }
       return null;
     })()
-  `);
+  `, commandOptions);
 
   if (!buttonClicked) {
-    const c = await getClient();
-    await c.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 2, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
-    await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter' });
+    await sendCdpCommand(
+      'Input',
+      'dispatchKeyEvent',
+      { type: 'keyDown', modifiers: 2, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 },
+      commandOptions,
+    );
+    await sendCdpCommand(
+      'Input',
+      'dispatchKeyEvent',
+      { type: 'keyUp', key: 'Enter', code: 'Enter' },
+      commandOptions,
+    );
   }
 
-  await new Promise(r => setTimeout(r, 2500));
+  await abortableDelay(2500, signal);
 
   const errors = await evaluate(`
     (function() {
@@ -482,7 +575,7 @@ export async function smartCompile() {
         return { line: mk.startLineNumber, column: mk.startColumn, message: mk.message, severity: mk.severity };
       });
     })()
-  `);
+  `, commandOptions);
 
   const studiesAfter = await evaluate(`
     (function() {
@@ -492,7 +585,7 @@ export async function smartCompile() {
       } catch(e) {}
       return null;
     })()
-  `);
+  `, commandOptions);
 
   const studyAdded = (studiesBefore !== null && studiesAfter !== null) ? studiesAfter > studiesBefore : null;
 
@@ -534,16 +627,19 @@ export async function newScript({ type }) {
   return { success: true, type, action: 'new_script_created', template: typeMap[type] };
 }
 
-export async function openScript({ name }) {
-  const editorReady = await ensurePineEditorOpen();
+export async function openScript({ name, signal, timeoutMs, _deps } = {}) {
+  const editorReady = await ensurePineEditorOpen({ signal, timeoutMs });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const escapedName = JSON.stringify(name.toLowerCase());
+  const evaluatePageAsync = _deps?.evaluateAsync || evaluateAsync;
 
-  const result = await evaluateAsync(`
-    (function() {
+  const operation = createPinePageOperation(`
       var target = ${escapedName};
-      return fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', { credentials: 'include' })
+      return fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', {
+        credentials: 'include',
+        signal: controller.signal
+      })
         .then(function(r) { return r.json(); })
         .then(function(scripts) {
           if (!Array.isArray(scripts)) return {error: 'pine-facade returned unexpected data'};
@@ -564,7 +660,10 @@ export async function openScript({ name }) {
 
           var id = match.scriptIdPart;
           var ver = match.version || 1;
-          return fetch('https://pine-facade.tradingview.com/pine-facade/get/' + id + '/' + ver, { credentials: 'include' })
+          return fetch('https://pine-facade.tradingview.com/pine-facade/get/' + id + '/' + ver, {
+            credentials: 'include',
+            signal: controller.signal
+          })
             .then(function(r2) { return r2.json(); })
             .then(function(data) {
               var source = data.source || '';
@@ -578,8 +677,12 @@ export async function openScript({ name }) {
             });
         })
         .catch(function(e) { return {error: e.message}; });
-    })()
   `);
+  const result = await evaluatePageAsync(operation.expression, {
+    signal,
+    timeoutMs,
+    cancelExpression: operation.cancelExpression,
+  });
 
   if (result?.error) {
     throw new Error(result.error);
@@ -588,9 +691,13 @@ export async function openScript({ name }) {
   return { success: true, name: result.name, script_id: result.id, lines: result.lines, source: 'internal_api', opened: true };
 }
 
-export async function listScripts() {
-  const scripts = await evaluateAsync(`
-    fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', { credentials: 'include' })
+export async function listScripts({ signal, timeoutMs, _deps } = {}) {
+  const evaluatePageAsync = _deps?.evaluateAsync || evaluateAsync;
+  const operation = createPinePageOperation(`
+    return fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', {
+      credentials: 'include',
+      signal: controller.signal
+    })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (!Array.isArray(data)) return {scripts: [], error: 'Unexpected response from pine-facade'};
@@ -606,8 +713,13 @@ export async function listScripts() {
           })
         };
       })
-      .catch(function(e) { return {scripts: [], error: e.message}; })
+      .catch(function(e) { return {scripts: [], error: e.message}; });
   `);
+  const scripts = await evaluatePageAsync(operation.expression, {
+    signal,
+    timeoutMs,
+    cancelExpression: operation.cancelExpression,
+  });
 
   return {
     success: true,
