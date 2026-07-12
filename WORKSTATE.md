@@ -1,6 +1,6 @@
 # WORKSTATE
 
-Last updated: 2026-07-12
+Last updated: 2026-07-13
 
 ## Side project: quant-github-atlas (2026-07-07) — COMPLETED
 
@@ -18,11 +18,11 @@ Last updated: 2026-07-12
 - P1-01 through P1-06 operational hardening is committed in separate intent
   groups. The remaining baseline raw CDP calls are P2 notes outside the
   accepted P1 paths.
-- Gate A0 Pine discovery is implemented and independently Approved. The
-  offline spec is 157/157 on three consecutive runs; the original unit gate
-  was 269/269 and the latest repository unit gate is 302/302. The frozen
-  artifact digest is
-  `0400ce7e163bc475f2a68609551754fe4530f67062ba87ca6e0e3cb25d5d9125`.
+- Gate A0 Pine discovery is implemented and independently Approved. After the
+  P1-07/P1-08 approval-boundary hardening, the offline A0 suite passes 191/191
+  on repeated runs. The current digest-bound Gate A1 artifact is
+  `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`.
+  Every earlier digest, approval, and nonce is invalid.
 - Gate A1 was attempted once. The exact command, target tuple, budgets, and
   residual caveat are frozen in the A0 approval envelope. The one approved attempt
   exited 1 at `PINE_DISCOVERY_OPEN` with ledger `1/0/1`, retry/fallback `0`,
@@ -35,11 +35,11 @@ Last updated: 2026-07-12
   separately approved diagnostic can distinguish the two without reopening.
 - Gate A1 evidence was independently integrated into
   `docs/superpowers/plans/2026-07-12-gate-a1-evidence-integration.md`.
-  The safe next issues are P1-07 close-capability fail-closed preflight,
-  P1-08 open-stage result classification, P1-09 closed-editor read-only
-  boundary, and P1-10 a new close-strategy approval artifact. These are
-  offline-first and require a new implementation/design approval; the old
-  A1 nonce cannot be reused.
+  P1-07 close-capability fail-closed preflight, P1-08 fixed open-stage result
+  classification, P1-09 closed-editor read-only boundary, and P1-10 the new
+  digest-bound close-strategy approval artifact are complete offline. The
+  Gate B coordinator offline foundation is also complete, but its live
+  dispatch remains disabled.
 - Final read-only review findings were resolved offline. `4d8d75f` clarifies
   the intentional health reuse-first contract in MCP/CLI help and adds
   description regression tests. `5f873a6` adds fixed `CdpTransportError`
@@ -69,15 +69,22 @@ Last updated: 2026-07-12
   abort controller so timeout cancellation reaches the underlying fetcher;
   both changes are covered by focused and adversarial tests and preserve the
   paper/read-only boundary.
-- The final offline review approved the pushed hardening set: adversarial
-  probes 42/42, focused strategy/stream 24/24, and repository unit 302/302.
-  `npm test` remains an approval-gated safe stop with zero external actions.
-- Gate B/full live E2E remain pending; the offline final review is approved. No
-  live CRI/CDP operation, TradingView/UI mutation, network POST, save, reload,
-  tab/process operation, or Gate A1 retry was run in this stream.
+- The latest independent final review is `Accepted` with zero Critical, zero
+  Important, and zero Minor findings. Verification passed A0 191/191 on
+  repeated runs, repository unit 332/332, and focused residual tests 33/33.
+  `npm test` remains an approval-gated safe stop with a zero-action ledger
+  (`external_action_count=0`, `live_test_started=false`).
+- No live CRI/CDP operation, TradingView/UI mutation, external network action,
+  save, reload, tab/process operation, or Gate A1 retry was run for the latest
+  offline issues. Gate A1 is blocked only on fresh written approval of the
+  exact current envelope and a fresh one-shot approval file. Gate B live
+  adapter, authenticated IPC, secret ingress, full E2E, and live before/after
+  benchmark remain unimplemented and require separate review and approval.
 
 - Historical TradingView trade-decision support artifacts and workflow notes remain in this repository; the older setup-verification context below is retained.
-- The repository is clean after the hardening commits; no untracked trade-system paths are part of this audit stream.
+- The previously pushed hardening commits were clean; the current offline
+  residual issue set is pending its final semantic commits. No unrelated
+  untracked trade-system path is part of this audit stream.
 - `journal/registry.json` contains 5 setups. All `fx` setup x market entries (`orb`, `vwap_reversion`, `pdh_pdl_break`, `ema_pullback`, `nr_squeeze`) have been verified and marked `rejected`; non-fx market entries are still `candidate`.
 - No setup x market is currently `adopted`; `/trade-judge` should still return structurally gated `NO-GO` for live judgement.
 - Read-only daily review artifacts now exist: `docs/read-only-daily-review.md`, `scripts/daily_review.js`, and `tests/daily_review.test.js`. This is a reporting/review layer only; it does not place orders, mutate chart state, or operate broker/payment UIs.
@@ -104,8 +111,13 @@ Last updated: 2026-07-12
 
 - Stop after completed `nr_squeeze` / `fx` verification and show `git status` plus `git diff --stat` before continuing.
 - If approved, proceed to `futures` market verification using the same setup-verify evidence loop.
-- Do not retry Gate A1 or add a close fallback. Obtain a new design/approval
-  decision for the current TradingView close API mismatch first.
+- Do not run Gate A1 until the user gives fresh written approval for digest
+  `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`
+  and its exact command, and a fresh one-shot approval file is safely issued.
+  Never reuse an old digest, approval, or nonce.
+- Do not enable Gate B live execution. Its live adapter, authenticated IPC,
+  secret ingress, full E2E, and live benchmark require a separate completed
+  implementation, review, envelope, and user approval.
 - Do not run `/trade-judge` E2E yet; no setup x market is `adopted`.
 - For the read-only reviewer, manually run `npm run daily-review -- --no-watchlist --bars 50` after TradingView Desktop is available on CDP. Keep it manual until the output proves useful and low-noise.
 - For any new strategy hypothesis, first generate/fill the JSON template with `npm run strategy-spec-check -- --template`, then run `npm run strategy-spec-check -- <spec.json>` and route missing-critical ideas to `no-action`.
@@ -169,11 +181,27 @@ Last updated: 2026-07-12
 - 2026-07-12: Ran `npm test` through the coordinator; it emitted
   `OFFLINE_APPROVAL_REQUIRED` with `external_action_count=0` and
   `live_test_started=false`.
+- 2026-07-13: Completed P1-07/P1-08/P1-09/P1-10 and the Gate B coordinator
+  offline foundation. Repeated A0 verification passed 191/191, repository unit
+  passed 332/332, and focused residual verification passed 33/33.
+- 2026-07-13: Independent final review returned `Accepted` with Critical 0,
+  Important 0, and Minor 0. `npm test` safe-stopped with a zero-action ledger;
+  no live/CDP/UI/network operation was performed.
+- 2026-07-13: Regenerated the offline Gate A1 approval envelope at digest
+  `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`.
+  No approval instance, nonce, or live-valid expiry was issued.
 - 2026-07-08: Launched TradingView Desktop with `HOME=/home/yukio` and CDP port 9222, then repaired current Linux/TradingView-build E2E drift: Linux binary path detection, visible-range assertion, bottom widget close fallback, and replay-stop cleanup.
 - 2026-07-08: Ran targeted E2E for `tv_launch|chart_set_visible_range|ui_open_panel|replay_stop`; 4/4 passed.
 - 2026-07-08: Ran full `npm run test`; 95/95 tests passed.
 
 ## Blockers
+
+- Gate A1 requires fresh written approval of the exact current envelope and a
+  fresh one-shot approval file. All older digests, approvals, and nonces are
+  invalid; no retry is authorized by this WORKSTATE entry.
+- Gate B live adapter, authenticated IPC, secret ingress, full E2E, and live
+  before/after benchmark are not implemented. They require separate
+  implementation, review, digest-bound approval, and a distinct fresh nonce.
 
 - CDP was unavailable during the 2026-07-07 read-only daily review sample run and the first 2026-07-08 full test attempt. Treat CDP/MCP failure as a hard stop for chart-state claims; do not fabricate chart or backtest results.
 - Current full verification is clean after launching TradingView with CDP: `npm run test` passed 95/95 on 2026-07-08.
