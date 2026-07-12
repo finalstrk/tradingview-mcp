@@ -77,9 +77,9 @@ const keepAlive = globalThis.setInterval(() => {}, 1000);
 
 function mappedDelay(delay) {
   if (mode === 'hard-during-cleanup') {
-    if (delay === 1000) return 40;
+    if (delay === 1000) return 100;
     if (delay === 20000) return 30;
-    if (delay === 10000) return 20;
+    if (delay === 10000) return 100;
     if (delay === 30000) return 50;
     if (delay === 100) return 1;
   }
