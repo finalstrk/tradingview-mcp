@@ -37,9 +37,11 @@ Last updated: 2026-07-13
   `docs/superpowers/plans/2026-07-12-gate-a1-evidence-integration.md`.
   P1-07 close-capability fail-closed preflight, P1-08 fixed open-stage result
   classification, P1-09 closed-editor read-only boundary, and P1-10 the new
-  digest-bound close-strategy approval artifact are complete offline. The
-  Gate B coordinator offline foundation is also complete, but its live
-  dispatch remains disabled.
+  digest-bound close-strategy approval artifact are complete offline. Gate B
+  production runtime v5 is also complete offline: actual main, 24 fixed cases
+  in six fixed children, digest-bound registries, secure lease, authenticated
+  session/protocol ledger, restore verification, and benchmark provenance are
+  implemented. Live dispatch remains approval-gated.
 - Final read-only review findings were resolved offline. `4d8d75f` clarifies
   the intentional health reuse-first contract in MCP/CLI help and adds
   description regression tests. `5f873a6` adds fixed `CdpTransportError`
@@ -70,16 +72,24 @@ Last updated: 2026-07-13
   both changes are covered by focused and adversarial tests and preserve the
   paper/read-only boundary.
 - The latest independent final review is `Accepted` with zero Critical, zero
-  Important, and zero Minor findings. Verification passed A0 191/191 on
-  repeated runs, repository unit 332/332, and focused residual tests 33/33.
+  Important, and zero Minor findings. Gate B v5 repository unit verification
+  passed 445 tests.
   `npm test` remains an approval-gated safe stop with a zero-action ledger
   (`external_action_count=0`, `live_test_started=false`).
+- Gate B binds a logical inventory of 11 operations, 978 attach and 978 detach
+  events, 7,832 reads, 122 mutations, 12 input events, 6 network requests, 8
+  child processes, 3 captures, and one full-gate invocation. These are offline
+  approval ceilings and simulated-ledger expectations, not live measurements.
+- Baseline benchmark provenance is fixed at commits `28e257e` and `c8ba1d9`.
+  Candidate code landed at `c78f0b5`; after the documentation commit, fresh
+  approval generation must bind `candidate_repository_commit` to the then-
+  current final HEAD rather than reusing `c78f0b5` as the candidate binding.
 - No live CRI/CDP operation, TradingView/UI mutation, external network action,
-  save, reload, tab/process operation, or Gate A1 retry was run for the latest
-  offline issues. Gate A1 is blocked only on fresh written approval of the
-  exact current envelope and a fresh one-shot approval file. Gate B live
-  adapter, authenticated IPC, secret ingress, full E2E, and live before/after
-  benchmark remain unimplemented and require separate review and approval.
+  save, reload, tab/process operation, Gate A1 retry, full live E2E, or real
+  benchmark was run for the latest offline issues. Gate A1 is blocked on fresh
+  exact written approval and a fresh one-shot approval file. Gate B is blocked
+  on a separately approved fresh v5 envelope and one-shot nonce; that live run
+  must supply the actual numeric before/after benchmark result.
 
 - Historical TradingView trade-decision support artifacts and workflow notes remain in this repository; the older setup-verification context below is retained.
 - The previously pushed hardening commits were clean; the current offline
@@ -115,9 +125,10 @@ Last updated: 2026-07-13
   `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`
   and its exact command, and a fresh one-shot approval file is safely issued.
   Never reuse an old digest, approval, or nonce.
-- Do not enable Gate B live execution. Its live adapter, authenticated IPC,
-  secret ingress, full E2E, and live benchmark require a separate completed
-  implementation, review, envelope, and user approval.
+- Do not run Gate B live execution until a fresh v5 envelope binds the final
+  post-documentation HEAD, a fresh one-shot nonce is issued, and the user gives
+  separate exact written approval. The approved live run must perform the real
+  E2E and paired benchmark; offline ledger values are not speed measurements.
 - Do not run `/trade-judge` E2E yet; no setup x market is `adopted`.
 - For the read-only reviewer, manually run `npm run daily-review -- --no-watchlist --bars 50` after TradingView Desktop is available on CDP. Keep it manual until the output proves useful and low-noise.
 - For any new strategy hypothesis, first generate/fill the JSON template with `npm run strategy-spec-check -- --template`, then run `npm run strategy-spec-check -- <spec.json>` and route missing-critical ideas to `no-action`.
@@ -190,6 +201,15 @@ Last updated: 2026-07-13
 - 2026-07-13: Regenerated the offline Gate A1 approval envelope at digest
   `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`.
   No approval instance, nonce, or live-valid expiry was issued.
+- 2026-07-13: Completed Gate B production runtime v5 at candidate code commit
+  `c78f0b5`, with 24 fixed cases, six children, production main, secure lease,
+  authenticated session/protocol ledger, restore verification, and immutable
+  benchmark provenance. Baseline provenance commits are `28e257e` and
+  `c8ba1d9`.
+- 2026-07-13: Gate B final offline review returned `Accepted` with Critical 0,
+  Important 0, and Minor 0; repository unit verification passed 445 tests and
+  `npm test` safe-stopped with zero external actions. No live/CDP/UI/network
+  action or real benchmark was run.
 - 2026-07-08: Launched TradingView Desktop with `HOME=/home/yukio` and CDP port 9222, then repaired current Linux/TradingView-build E2E drift: Linux binary path detection, visible-range assertion, bottom widget close fallback, and replay-stop cleanup.
 - 2026-07-08: Ran targeted E2E for `tv_launch|chart_set_visible_range|ui_open_panel|replay_stop`; 4/4 passed.
 - 2026-07-08: Ran full `npm run test`; 95/95 tests passed.
@@ -199,9 +219,11 @@ Last updated: 2026-07-13
 - Gate A1 requires fresh written approval of the exact current envelope and a
   fresh one-shot approval file. All older digests, approvals, and nonces are
   invalid; no retry is authorized by this WORKSTATE entry.
-- Gate B live adapter, authenticated IPC, secret ingress, full E2E, and live
-  before/after benchmark are not implemented. They require separate
-  implementation, review, digest-bound approval, and a distinct fresh nonce.
+- Gate B production runtime is implemented and accepted offline, but no fresh
+  v5 live envelope or nonce has been issued. Generate approval only after the
+  final documentation commit so `candidate_repository_commit` binds current
+  HEAD; then obtain separate exact written approval. Full live E2E and the
+  actual numeric before/after benchmark remain unexecuted.
 
 - CDP was unavailable during the 2026-07-07 read-only daily review sample run and the first 2026-07-08 full test attempt. Treat CDP/MCP failure as a hard stop for chart-state claims; do not fabricate chart or backtest results.
 - Current full verification is clean after launching TradingView with CDP: `npm run test` passed 95/95 on 2026-07-08.

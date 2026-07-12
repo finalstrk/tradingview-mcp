@@ -178,15 +178,19 @@ traffic nor absence of page network effects may be claimed.
 
 ## Gate separation
 
-This artifact does not approve Gate B or a full E2E run. Gate B live adapter
-dispatch, authenticated loopback IPC, secret ingress, complete external-action
-ledger integration, full live E2E, and before/after live benchmarks are not
-implemented and are not approved. The existing coordinator is an offline-only
-foundation and records `DISABLED_PENDING_FRESH_GATE_B_APPROVAL`.
+This artifact does not approve Gate B or a full E2E run. Gate B now has an
+authenticated loopback ledger, secure approval-file ingress, migrated fixed
+case children, guarded owner modules, and an approval-bound benchmark runner.
+Those paths remain inactive by default: dispatch is restricted to
+`INJECTED_REVIEWED_ADAPTER_ONLY`, and normal `npm test` stops offline with zero
+external actions. No fresh Gate B approval file or nonce has been issued, and
+no full live E2E or before/after live benchmark has been run or approved.
 
 A Gate A1 success may provide evidence for later design work, but it cannot be
-treated as Gate B approval. Gate B requires a separately reviewed implementation,
-new digest-bound envelope, and a different fresh one-shot nonce.
+treated as Gate B approval. The Gate B v5 implementation is complete and
+independently accepted offline, but activation still requires a new
+digest-bound v5 envelope, separate written approval, and a different fresh
+one-shot nonce.
 
 ## Machine-checkable approval checklist
 
