@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { constants } from 'node:fs';
+import {
+  chmod, lstat, mkdir, mkdtemp, open, readFile, readlink, rename, rm, stat, symlink, unlink, writeFile,
+} from 'node:fs/promises';
+import { basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { types } from 'node:util';
 import vm from 'node:vm';
@@ -13,6 +16,7 @@ const ARTIFACT_PATH = resolve(REPO_ROOT, 'scripts/pine_discovery_gate_a1.mjs');
 const ARTIFACT_URL = pathToFileURL(ARTIFACT_PATH).href;
 const TEST_HOST_PATH = resolve(REPO_ROOT, 'tests/pine_discovery_gate_a0.spec.mjs');
 const CHILD_FIXTURE_PATH = resolve(REPO_ROOT, 'tests/fixtures/pine_discovery_gate_a0_child.mjs');
+const SPENT_REGISTRY_PATH = resolve(REPO_ROOT, '.git/tradingview-mcp-gate-a1/spent');
 
 const EXPECTED_EXPORTS = Object.freeze([
   'CLEANUP_RESERVE_MS',
@@ -31,6 +35,7 @@ const EXPECTED_EXPORTS = Object.freeze([
   'buildApprovalEnvelope',
   'computeProbeSelfSha256',
   'validateProbeResult',
+  'consumeApprovalLease',
 ]);
 
 const EXPECTED_TARGET = Object.freeze({
@@ -98,7 +103,14 @@ const EXPECTED_ERROR_CODES = Object.freeze({
   CONNECT: 'PINE_DISCOVERY_CONNECT',
   CONTEXT_CHANGED: 'PINE_DISCOVERY_CONTEXT_CHANGED',
   PREFLIGHT: 'PINE_DISCOVERY_PREFLIGHT',
+  CLOSE_CAPABILITY: 'PINE_DISCOVERY_CLOSE_CAPABILITY',
   OPEN: 'PINE_DISCOVERY_OPEN',
+  OPEN_ACTION_REJECTED: 'PINE_DISCOVERY_OPEN_ACTION_REJECTED',
+  OPEN_NON_BOOLEAN: 'PINE_DISCOVERY_OPEN_NON_BOOLEAN',
+  OPEN_VISIBILITY_UNPROVEN: 'PINE_DISCOVERY_OPEN_VISIBILITY_UNPROVEN',
+  OPEN_PROTOCOL: 'PINE_DISCOVERY_OPEN_PROTOCOL',
+  OPEN_PAGE: 'PINE_DISCOVERY_OPEN_PAGE',
+  OPEN_DEADLINE: 'PINE_DISCOVERY_OPEN_DEADLINE',
   PROTOCOL: 'PINE_DISCOVERY_PROTOCOL',
   PAGE: 'PINE_DISCOVERY_PAGE',
   INVALID: 'PINE_DISCOVERY_RESULT_INVALID',
@@ -109,12 +121,14 @@ const EXPECTED_ERROR_CODES = Object.freeze({
   HARD_DEADLINE: 'PINE_DISCOVERY_HARD_DEADLINE',
   INTERNAL: 'PINE_DISCOVERY_INTERNAL',
   DIGEST: 'PINE_DISCOVERY_DIGEST',
+  APPROVAL: 'PINE_DISCOVERY_APPROVAL',
 });
 
 const STATIC_EXPORTS = Object.freeze({
   'node:crypto': Object.freeze({ createHash, timingSafeEqual }),
-  'node:fs/promises': Object.freeze({ readFile }),
-  'node:path': Object.freeze({ resolve }),
+  'node:fs': Object.freeze({ constants }),
+  'node:fs/promises': Object.freeze({ lstat, mkdir, open, readFile, readlink, stat }),
+  'node:path': Object.freeze({ basename, dirname, resolve }),
   'node:url': Object.freeze({ fileURLToPath: (await import('node:url')).fileURLToPath }),
   'node:util': Object.freeze({ types }),
 });
@@ -134,7 +148,7 @@ async function readArtifactSource() {
 
 function createProcessStub(
   argv = [process.execPath, TEST_HOST_PATH],
-  { stdoutCallbackMode = 'fire' } = {},
+  { stdoutCallbackMode = 'fire', env = {} } = {},
 ) {
   const state = {
     stdoutWrites: [],
@@ -165,7 +179,7 @@ function createProcessStub(
   });
   const processStub = Object.freeze({
     argv: Object.freeze([...argv]),
-    env: Object.freeze({}),
+    env: Object.freeze({ ...env }),
     execPath: process.execPath,
     stdout,
     stderr,
@@ -187,10 +201,10 @@ function createTimerHarness(observer) {
     if (observer && originalDelay === 100) observer.pendingDelay100 -= 1;
   };
   const mapDelay = (delay) => {
-    if (delay === 1000) return 5;
-    if (delay === 20000) return 20;
-    if (delay === 10000) return 10;
-    if (delay === 30000) return 30;
+    if (delay === 1000) return 20;
+    if (delay === 20000) return 200;
+    if (delay === 10000) return 100;
+    if (delay === 30000) return 300;
     if (delay === 100) return 2;
     return Math.min(Number(delay) || 0, 5);
   };
@@ -198,6 +212,17 @@ function createTimerHarness(observer) {
     state,
     setTimeout(callback, delay, ...args) {
       state.setCalls += 1;
+      if (delay === 100) {
+        const handle = { logicalDelay100: true, cancelled: false };
+        delayByHandle.set(handle, delay);
+        if (observer) observer.pendingDelay100 += 1;
+        queueMicrotask(() => {
+          if (handle.cancelled) return;
+          untrack(handle);
+          callback(...args);
+        });
+        return handle;
+      }
       let handle;
       handle = globalThis.setTimeout((...callbackArgs) => {
         untrack(handle);
@@ -209,6 +234,11 @@ function createTimerHarness(observer) {
     },
     clearTimeout(handle) {
       state.clearCalls += 1;
+      if (handle && handle.logicalDelay100 === true) {
+        handle.cancelled = true;
+        untrack(handle);
+        return undefined;
+      }
       untrack(handle);
       return globalThis.clearTimeout(handle);
     },
@@ -258,8 +288,9 @@ async function evaluateSource(source, {
   dynamicModuleFactory,
   stdoutCallbackMode = 'fire',
   timerObserver,
+  env,
 } = {}) {
-  const processHarness = createProcessStub(argv, { stdoutCallbackMode });
+  const processHarness = createProcessStub(argv, { stdoutCallbackMode, env });
   const timerHarness = createTimerHarness(timerObserver);
   const state = processHarness.state;
   state.dynamicImportCount = 0;
@@ -332,34 +363,12 @@ async function awaitExit(exitPromise, label) {
   }
 }
 
-async function settleWithLogicalTimerTicks(promise, mockTimers, timerObserver, label) {
-  let settled = false;
-  let value;
-  let rejection;
-  promise.then(
-    (result) => {
-      settled = true;
-      value = result;
-    },
-    (error) => {
-      settled = true;
-      rejection = error;
-    },
-  );
-  for (let index = 0; index < 200 && !settled; index += 1) {
-    await new Promise((resolvePromise) => setImmediate(resolvePromise));
-    if (timerObserver.pendingDelay100 > 0) mockTimers.tick(2);
-  }
-  if (!settled) throw new Error(`logical timer scenario did not settle: ${label}`);
-  if (rejection !== undefined) throw rejection;
-  return value;
-}
-
 async function runArtifactCli(cliArgs, {
   dynamicDefault = Object.freeze({}),
   dynamicModuleFactory,
   stdoutCallbackMode = 'fire',
   timerObserver,
+  env,
 } = {}) {
   const result = await loadArtifact({
     argv: [process.execPath, ARTIFACT_PATH, ...cliArgs],
@@ -367,6 +376,7 @@ async function runArtifactCli(cliArgs, {
       ?? ((context) => createDynamicCdpModule(context, dynamicDefault)),
     stdoutCallbackMode,
     timerObserver,
+    env,
   });
   const exitCode = await awaitExit(result.exitPromise, cliArgs.join(' ') || '<no-args>');
   return {
@@ -555,6 +565,7 @@ function classifyDeclaration(functionDeclaration, probeDeclaration) {
   if (functionDeclaration === probeDeclaration) return 'probe';
   for (const [marker, name] of [
     ['gate-a0-preflight-v1', 'preflight'],
+    ['gate-a1-close-capability-v1', 'close-capability'],
     ['gate-a0-open-v1', 'open'],
     ['gate-a0-close-v1', 'close'],
     ['gate-a0-postflight-v1', 'postflight'],
@@ -678,6 +689,18 @@ function createFakeCdp({
         applyAfterActionDrift(action);
         return response;
       }
+      if (action === 'close-capability') {
+        if (mode === 'close-capability-throw') throw new Error('RAW_CLOSE_CAPABILITY_SENTINEL');
+        if (mode === 'close-capability-hang') return neverSettles();
+        if (mode === 'close-capability-missing'
+          || mode === 'close-capability-disappear') {
+          return { result: { type: 'boolean', value: false } };
+        }
+        if (mode === 'close-capability-nonboolean') {
+          return { result: { type: 'string', value: 'true' } };
+        }
+        return { result: { type: 'boolean', value: true } };
+      }
       if (action === 'open') {
         calls.openActionCalls += 1;
         visibilityPhase = 'after-open';
@@ -686,6 +709,8 @@ function createFakeCdp({
         }
         if (mode === 'open-hang') return neverSettles();
         if (mode === 'open-false') return { result: { type: 'boolean', value: false } };
+        if (mode === 'open-nonboolean') return { result: { type: 'string', value: 'true' } };
+        if (mode === 'open-page') return { exceptionDetails: { text: 'RAW_OPEN_PAGE_SENTINEL' } };
         const response = { result: { type: 'boolean', value: true } };
         applyAfterActionDrift(action);
         return response;
@@ -729,6 +754,13 @@ function createFakeCdp({
           calls.visibilityAfterOpen += 1;
           if (mode === 'open-visibility-query-throw') {
             return throwingVisibilityResponse(params.functionDeclaration);
+          }
+          if (mode === 'open-visibility-page') {
+            return { exceptionDetails: { text: 'RAW_OPEN_VISIBILITY_PAGE_SENTINEL' } };
+          }
+          if (mode === 'open-visibility-protocol') return {};
+          if (mode === 'open-visibility-unproven') {
+            return { result: { type: 'boolean', value: false } };
           }
           const visible = mode === 'visibility-open-delayed'
             ? calls.visibilityAfterOpen >= 8
@@ -869,6 +901,52 @@ function createFakeCdp({
   };
 }
 
+let approvalFixtureCounter = 0;
+
+async function createApprovalFixture(digest, patch = {}) {
+  const directory = await mkdtemp('/tmp/tradingview-a1-approval-');
+  const approvalPath = resolve(directory, 'approval.json');
+  const now = Date.now();
+  approvalFixtureCounter += 1;
+  const approval = {
+    schema_version: 1,
+    nonce: createHash('sha256').update(`${directory}:${approvalFixtureCounter}`).digest('hex'),
+    bundle_sha256: digest,
+    target_id: EXPECTED_TARGET.id,
+    exact_command: `node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=${digest}`,
+    issued_at: new Date(now - 1000).toISOString(),
+    expires_at: new Date(now + 60_000).toISOString(),
+    initial_tuple: {
+      symbol: EXPECTED_TARGET.symbol,
+      resolution: EXPECTED_TARGET.resolution,
+      chart_type: EXPECTED_TARGET.chart_type,
+      study_count: EXPECTED_TARGET.study_count,
+      shape_count: EXPECTED_TARGET.shape_count,
+      replay_started: EXPECTED_TARGET.replay_started,
+      bottom_widget_open: EXPECTED_TARGET.bottom_widget_open,
+      pine_editor_open: EXPECTED_TARGET.pine_editor_open,
+    },
+    budgets: { ...EXPECTED_BUDGET },
+    ...patch,
+  };
+  await writeFile(approvalPath, JSON.stringify(approval), { mode: 0o600 });
+  await chmod(approvalPath, 0o600);
+  const nonceHash = createHash('sha256').update(approval.nonce).digest('hex');
+  return {
+    approval,
+    approvalPath,
+    directory,
+    spentPath: resolve(SPENT_REGISTRY_PATH, `${nonceHash}.json`),
+  };
+}
+
+async function cleanupApprovalFixture(fixture) {
+  await unlink(fixture.spentPath).catch((error) => {
+    if (!error || error.code !== 'ENOENT') throw error;
+  });
+  await rm(fixture.directory, { recursive: true, force: true });
+}
+
 async function runDScenario(mode, options = {}) {
   const { timerObserver, ...fakeOptions } = options;
   const importOnly = await loadArtifact();
@@ -878,11 +956,20 @@ async function runDScenario(mode, options = {}) {
     probeDeclaration: importOnly.namespace.PROBE_FUNCTION_DECLARATION,
     ...fakeOptions,
   });
-  const result = await runArtifactCli(
-    [`--bundle-sha256=${digest}`],
-    { dynamicDefault: fake.cdp, timerObserver },
-  );
-  return { ...result, fake, probeDeclaration: importOnly.namespace.PROBE_FUNCTION_DECLARATION };
+  const fixture = await createApprovalFixture(digest);
+  try {
+    const result = await runArtifactCli(
+      [`--bundle-sha256=${digest}`],
+      {
+        dynamicDefault: fake.cdp,
+        timerObserver,
+        env: { PINE_DISCOVERY_APPROVAL_FILE: fixture.approvalPath },
+      },
+    );
+    return { ...result, fake, probeDeclaration: importOnly.namespace.PROBE_FUNCTION_DECLARATION };
+  } finally {
+    await cleanupApprovalFixture(fixture);
+  }
 }
 
 function assertExactLedger(payload, open, probe, close) {
@@ -1014,12 +1101,13 @@ test('Stage A: exact frozen constants and public namespace', async () => {
   }
 });
 
-test('Stage A: static imports and named bindings are the exact five-module allowlist', async () => {
+test('Stage A: static imports and named bindings are the exact six-module allowlist', async () => {
   const { source } = await loadArtifact();
   assert.deepEqual(parseStaticImports(source), [
     { specifier: 'node:crypto', names: ['createHash', 'timingSafeEqual'] },
-    { specifier: 'node:fs/promises', names: ['readFile'] },
-    { specifier: 'node:path', names: ['resolve'] },
+    { specifier: 'node:fs', names: ['constants'] },
+    { specifier: 'node:fs/promises', names: ['lstat', 'mkdir', 'open', 'readFile', 'readlink', 'stat'] },
+    { specifier: 'node:path', names: ['basename', 'dirname', 'resolve'] },
     { specifier: 'node:url', names: ['fileURLToPath'] },
     { specifier: 'node:util', names: ['types'] },
   ]);
@@ -1125,6 +1213,7 @@ test('Stage B: approval envelope binds exact artifact digest, command, tuple, bu
   assert.deepEqual(result.state.exits, [0]);
   assert.deepEqual(Object.keys(result.parsed).sort(), [
     'budgets',
+    'approval',
     'bundle_sha256',
     'cleanup_reserve_ms',
     'exact_command',
@@ -1150,6 +1239,16 @@ test('Stage B: approval envelope binds exact artifact digest, command, tuple, bu
   ]);
   assert.doesNotMatch(result.parsed.exact_command, /--import|tests\/|offline_network_guard|["']/);
   assert.equal(result.parsed.target_id, EXPECTED_TARGET.id);
+  assert.deepEqual(toHostPlain(result.parsed.approval), {
+    schema_version: 1,
+    secret_ingress_env: 'PINE_DISCOVERY_APPROVAL_FILE',
+    file_mode: '0600',
+    nonce_format: '64 lowercase hexadecimal characters',
+    issued_at: 'strict ISO-8601 UTC timestamp supplied by approver',
+    expires_at: 'strict ISO-8601 UTC timestamp supplied by approver',
+    max_ttl_ms: 300000,
+    one_shot: true,
+  });
   assert.deepEqual(toHostPlain(result.parsed.initial_tuple), {
     symbol: EXPECTED_TARGET.symbol,
     resolution: EXPECTED_TARGET.resolution,
@@ -1172,14 +1271,289 @@ test('Stage B: approval envelope binds exact artifact digest, command, tuple, bu
   assert.equal(result.parsed.tradingview_page_initiated_network, 'UNKNOWN');
 });
 
+test('Stage B: approval lease is strict, one-shot, concurrent-safe, and crash-residual-safe', async (t) => {
+  const { namespace, source } = await loadArtifact();
+  const digest = independentArtifactDigest(source);
+
+  await t.test('missing ingress fails before CRI import with zero ledger', async () => {
+    const result = await runArtifactCli([`--bundle-sha256=${digest}`]);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.state.dynamicImportCount, 0);
+    assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.APPROVAL);
+    assertExactLedger(result.parsed, 0, 0, 0);
+  });
+
+  for (const [name, mutate] of [
+    ['expired', (value) => ({ ...value, expires_at: new Date(Date.now() - 1).toISOString() })],
+    ['future-issued', (value) => ({ ...value, issued_at: new Date(Date.now() + 60_000).toISOString() })],
+    ['malformed-nonce', (value) => ({ ...value, nonce: 'secret-nonce' })],
+    ['extra-top-level', (value) => ({ ...value, extra: true })],
+    ['extra-tuple', (value) => ({
+      ...value,
+      initial_tuple: { ...value.initial_tuple, extra: true },
+    })],
+    ['wrong-target', (value) => ({ ...value, target_id: `${value.target_id}0` })],
+    ['wrong-command', (value) => ({ ...value, exact_command: `${value.exact_command} --extra` })],
+    ['wrong-bundle', (value) => ({ ...value, bundle_sha256: changeDigestNibble(digest) })],
+  ]) {
+    await t.test(name, async () => {
+      const fixture = await createApprovalFixture(digest);
+      const mutated = mutate(fixture.approval);
+      await writeFile(fixture.approvalPath, JSON.stringify(mutated), { mode: 0o600 });
+      await chmod(fixture.approvalPath, 0o600);
+      try {
+        const result = await runArtifactCli(
+          [`--bundle-sha256=${digest}`],
+          { env: { PINE_DISCOVERY_APPROVAL_FILE: fixture.approvalPath } },
+        );
+        assert.equal(result.exitCode, 1);
+        assert.equal(result.state.dynamicImportCount, 0);
+        assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.APPROVAL);
+        assertExactLedger(result.parsed, 0, 0, 0);
+        assert.doesNotMatch(result.state.stdoutWrites[0], new RegExp(fixture.approval.nonce, 'i'));
+      } finally {
+        await rm(fixture.directory, { recursive: true, force: true });
+      }
+    });
+  }
+
+  await t.test('non-0600 file is rejected', async () => {
+    const fixture = await createApprovalFixture(digest);
+    await chmod(fixture.approvalPath, 0o644);
+    try {
+      assert.equal(await namespace.consumeApprovalLease(fixture.approvalPath, digest), false);
+    } finally {
+      await rm(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('symlink ingress is rejected without consuming its target', async () => {
+    const fixture = await createApprovalFixture(digest);
+    const symlinkPath = resolve(fixture.directory, 'approval-link.json');
+    await symlink(fixture.approvalPath, symlinkPath);
+    try {
+      assert.equal(await namespace.consumeApprovalLease(symlinkPath, digest), false);
+      assert.equal((await stat(fixture.approvalPath)).isFile(), true);
+    } finally {
+      await rm(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('symlinked parent component is rejected', async () => {
+    const fixture = await createApprovalFixture(digest);
+    const wrapper = await mkdtemp('/tmp/tradingview-a1-parent-link-');
+    const alias = resolve(wrapper, 'approval-parent');
+    await symlink(fixture.directory, alias);
+    try {
+      assert.equal(
+        await namespace.consumeApprovalLease(resolve(alias, 'approval.json'), digest),
+        false,
+      );
+    } finally {
+      await rm(wrapper, { recursive: true, force: true });
+      await rm(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('rename-to-symlink and regular-file swap fail closed', async () => {
+    for (const replacement of ['symlink', 'regular']) {
+      const fixture = await createApprovalFixture(digest);
+      const heldPath = resolve(fixture.directory, 'approval-held.json');
+      await rename(fixture.approvalPath, heldPath);
+      if (replacement === 'symlink') {
+        await symlink(heldPath, fixture.approvalPath);
+      } else {
+        await writeFile(fixture.approvalPath, '{"swapped":true}', { mode: 0o600 });
+        await chmod(fixture.approvalPath, 0o600);
+      }
+      try {
+        assert.equal(await namespace.consumeApprovalLease(fixture.approvalPath, digest), false);
+      } finally {
+        await rm(fixture.directory, { recursive: true, force: true });
+      }
+    }
+  });
+
+  for (const phase of ['directory-stat', 'approval-stat', 'approval-read']) {
+    await t.test(`parent rename injection at ${phase} writes no marker in either namespace`, async () => {
+      const fixture = await createApprovalFixture(digest);
+      const movedDirectory = `${fixture.directory}-moved`;
+      const nonceHash = createHash('sha256').update(fixture.approval.nonce).digest('hex');
+      const markerName = `.pine-discovery-spent-${nonceHash}`;
+      const probeHandle = await open(fixture.approvalPath, 'r');
+      const prototype = Object.getPrototypeOf(probeHandle);
+      await probeHandle.close();
+      const methodName = phase === 'approval-read' ? 'readFile' : 'stat';
+      const originalMethod = prototype[methodName];
+      let injected = false;
+      prototype[methodName] = async function injectedParentRename(...args) {
+        const target = await readlink(`/proc/self/fd/${this.fd}`);
+        const result = await originalMethod.apply(this, args);
+        const shouldInject = !injected && (
+          (phase === 'directory-stat' && target === fixture.directory)
+          || (phase !== 'directory-stat' && target === fixture.approvalPath)
+        );
+        if (shouldInject) {
+          injected = true;
+          await rename(fixture.directory, movedDirectory);
+          await mkdir(fixture.directory, { mode: 0o700 });
+        }
+        return result;
+      };
+      try {
+        assert.equal(await namespace.consumeApprovalLease(fixture.approvalPath, digest), false);
+        assert.equal(injected, true);
+        await assert.rejects(
+          stat(resolve(fixture.directory, markerName)),
+          (error) => error?.code === 'ENOENT',
+        );
+        await assert.rejects(
+          stat(resolve(movedDirectory, markerName)),
+          (error) => error?.code === 'ENOENT',
+        );
+        await assert.rejects(stat(fixture.spentPath), (error) => error?.code === 'ENOENT');
+      } finally {
+        prototype[methodName] = originalMethod;
+        await rm(fixture.directory, { recursive: true, force: true });
+        await rm(movedDirectory, { recursive: true, force: true });
+      }
+    });
+  }
+
+  await t.test('source binds validation to one no-follow FD and never hard-links approval plaintext', () => {
+    assert.match(source, /constants\.O_DIRECTORY \| constants\.O_NOFOLLOW/);
+    assert.match(source, /`\/proc\/self\/fd\/\$\{directory\.fd\}`/);
+    assert.match(source, /open\([\s\S]*anchoredApprovalPath,[\s\S]*constants\.O_RDONLY \| constants\.O_NOFOLLOW/);
+    assert.match(source, /approvalHandle\.stat\(\)/);
+    assert.match(source, /approvalHandle\.readFile\(\)/);
+    assert.match(source, /currentMetadata\.ino !== metadata\.ino/);
+    assert.doesNotMatch(source, /link\(approvalPath|copyFile\(approvalPath/);
+  });
+
+  await t.test('only one concurrent claimant consumes a nonce', async () => {
+    const fixture = await createApprovalFixture(digest);
+    try {
+      const claims = await Promise.all([
+        namespace.consumeApprovalLease(fixture.approvalPath, digest),
+        namespace.consumeApprovalLease(fixture.approvalPath, digest),
+      ]);
+      assert.deepEqual(claims.sort(), [false, true]);
+      assert.equal(await namespace.consumeApprovalLease(fixture.approvalPath, digest), false);
+      const nonceHash = createHash('sha256').update(fixture.approval.nonce).digest('hex');
+      const marker = await readFile(
+        fixture.spentPath,
+        'utf8',
+      );
+      assert.doesNotMatch(marker, new RegExp(fixture.approval.nonce, 'i'));
+      assert.doesNotMatch(marker, /"nonce"\s*:/);
+      assert.doesNotMatch(marker, new RegExp(JSON.stringify(fixture.approval).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    } finally {
+      await cleanupApprovalFixture(fixture);
+    }
+  });
+
+  await t.test('same approval copied across two 0600 directories is globally one-shot', async () => {
+    const first = await createApprovalFixture(digest);
+    const second = await createApprovalFixture(digest);
+    second.approval = first.approval;
+    second.spentPath = first.spentPath;
+    await writeFile(second.approvalPath, JSON.stringify(first.approval), { mode: 0o600 });
+    await chmod(second.approvalPath, 0o600);
+    try {
+      const claims = [
+        await namespace.consumeApprovalLease(first.approvalPath, digest),
+        await namespace.consumeApprovalLease(second.approvalPath, digest),
+      ];
+      assert.deepEqual(claims, [true, false]);
+      assert.equal((await stat(first.spentPath)).isFile(), true);
+    } finally {
+      await cleanupApprovalFixture(first);
+      await cleanupApprovalFixture(second);
+    }
+  });
+
+  await t.test('durable spent lease exists before CRI import begins', async () => {
+    const fixture = await createApprovalFixture(digest);
+    const spentPath = fixture.spentPath;
+    let observedAtImport = false;
+    try {
+      const result = await runArtifactCli(
+        [`--bundle-sha256=${digest}`],
+        {
+          env: { PINE_DISCOVERY_APPROVAL_FILE: fixture.approvalPath },
+          dynamicModuleFactory: async (context) => {
+            const spent = await stat(spentPath);
+            assert.equal((await stat(fixture.approvalPath)).isFile(), true);
+            observedAtImport = spent.isFile();
+            return createDynamicCdpModule(context, Object.freeze({}));
+          },
+        },
+      );
+      assert.equal(observedAtImport, true);
+      assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.MODULE);
+      assertExactLedger(result.parsed, 0, 0, 0);
+    } finally {
+      await cleanupApprovalFixture(fixture);
+    }
+  });
+
+  await t.test('pre-existing spent lease rejects active crash residue', async () => {
+    const fixture = await createApprovalFixture(digest);
+    const nonceHash = createHash('sha256').update(fixture.approval.nonce).digest('hex');
+    const spentPath = fixture.spentPath;
+    await mkdir(SPENT_REGISTRY_PATH, { recursive: true, mode: 0o700 });
+    await writeFile(spentPath, JSON.stringify({
+      schema_version: 1,
+      nonce_digest: nonceHash,
+      envelope_digest: createHash('sha256').update(JSON.stringify(fixture.approval)).digest('hex'),
+      issued_at: fixture.approval.issued_at,
+      expires_at: fixture.approval.expires_at,
+    }), { mode: 0o600 });
+    await chmod(spentPath, 0o600);
+    try {
+      assert.equal(await namespace.consumeApprovalLease(fixture.approvalPath, digest), false);
+      assert.equal((await stat(fixture.approvalPath)).isFile(), true);
+      assert.equal((await stat(spentPath)).isFile(), true);
+      const marker = await readFile(spentPath, 'utf8');
+      assert.doesNotMatch(marker, new RegExp(fixture.approval.nonce, 'i'));
+      assert.doesNotMatch(marker, /"nonce"\s*:/);
+    } finally {
+      await cleanupApprovalFixture(fixture);
+    }
+  });
+
+  await t.test('secret nonce never reaches stdout or stderr on rejection', async () => {
+    const fixture = await createApprovalFixture(digest, { expires_at: 'malformed-secret-expiry' });
+    try {
+      const result = await runArtifactCli(
+        [`--bundle-sha256=${digest}`],
+        { env: { PINE_DISCOVERY_APPROVAL_FILE: fixture.approvalPath } },
+      );
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.state.dynamicImportCount, 0);
+      assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.APPROVAL);
+      assertExactLedger(result.parsed, 0, 0, 0);
+      const output = `${result.state.stdoutWrites.join('')} ${result.state.stderrWrites.join('')}`;
+      assert.doesNotMatch(output, new RegExp(fixture.approval.nonce, 'i'));
+      assert.doesNotMatch(output, /malformed-secret-expiry/);
+    } finally {
+      await rm(fixture.directory, { recursive: true, force: true });
+    }
+  });
+});
+
 test('Stage B: valid digest dynamically imports CRI exactly once and rejects a non-callable default safely', async () => {
   const source = await readArtifactSource();
   const digest = independentArtifactDigest(source);
   const sentinel = 'RAW_MODULE_VALUE_MUST_NOT_LEAK';
+  const fixture = await createApprovalFixture(digest);
   const result = await runArtifactCli(
     [`--bundle-sha256=${digest}`],
-    { dynamicDefault: Object.freeze({ sentinel }) },
-  );
+    {
+      dynamicDefault: Object.freeze({ sentinel }),
+      env: { PINE_DISCOVERY_APPROVAL_FILE: fixture.approvalPath },
+    },
+  ).finally(() => cleanupApprovalFixture(fixture));
   assert.equal(result.exitCode, 1);
   assert.equal(result.state.dynamicImportCount, 1);
   assert.equal(result.state.stdoutWrites.length, 1);
@@ -1212,6 +1586,7 @@ test('Stage B: namespace and production source expose no live callable or depend
   assert.deepEqual(exportedFunctions, [
     'buildApprovalEnvelope',
     'computeProbeSelfSha256',
+    'consumeApprovalLease',
     'validateProbeResult',
   ]);
   assert.doesNotMatch(
@@ -1544,6 +1919,7 @@ test('Stage D: success follows fixed order with exact budgets and closed residua
     'List',
     'connect',
     'preflight',
+    'close-capability',
     'open',
     'probe',
     'close',
@@ -1570,12 +1946,44 @@ test('Stage D: false, missing, or wrong-type preflight performs no UI action and
   }
 });
 
-test('Stage D: open failures pre-consume open and finally close at most once', async (t) => {
-  for (const mode of ['open-throw', 'open-hang', 'open-false']) {
+test('Stage D: close capability preflight fail-closes before every effect', async (t) => {
+  for (const mode of [
+    'close-capability-missing',
+    'close-capability-throw',
+    'close-capability-hang',
+    'close-capability-nonboolean',
+    'close-capability-disappear',
+  ]) {
     await t.test(mode, async () => {
       const result = await runDScenario(mode);
       assert.equal(result.exitCode, 1);
-      assert.ok([EXPECTED_ERROR_CODES.OPEN, EXPECTED_ERROR_CODES.DEADLINE].includes(result.parsed.error_code));
+      assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.CLOSE_CAPABILITY);
+      assertExactLedger(result.parsed, 0, 0, 0);
+      assert.equal(result.fake.calls.openActionCalls, 0);
+      assert.equal(result.fake.calls.closeActionCalls, 0);
+      assert.deepEqual(result.fake.calls.actionOrder.slice(0, 4), [
+        'List', 'connect', 'preflight', 'close-capability',
+      ]);
+      assert.doesNotMatch(result.state.stdoutWrites[0], /RAW_CLOSE_CAPABILITY_SENTINEL/);
+    });
+  }
+});
+
+test('Stage D: open failures use fixed secret-safe classifications', async (t) => {
+  for (const [mode, expectedCode] of [
+    ['open-false', EXPECTED_ERROR_CODES.OPEN_ACTION_REJECTED],
+    ['open-nonboolean', EXPECTED_ERROR_CODES.OPEN_NON_BOOLEAN],
+    ['open-visibility-unproven', EXPECTED_ERROR_CODES.OPEN_VISIBILITY_UNPROVEN],
+    ['open-throw', EXPECTED_ERROR_CODES.OPEN_PROTOCOL],
+    ['open-page', EXPECTED_ERROR_CODES.OPEN_PAGE],
+    ['open-hang', EXPECTED_ERROR_CODES.OPEN_DEADLINE],
+    ['open-visibility-protocol', EXPECTED_ERROR_CODES.OPEN_PROTOCOL],
+    ['open-visibility-page', EXPECTED_ERROR_CODES.OPEN_PAGE],
+  ]) {
+    await t.test(mode, async () => {
+      const result = await runDScenario(mode);
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.parsed.error_code, expectedCode);
       assert.equal(result.parsed.ledger.editor_open_attempt_count, 1);
       assert.equal(result.parsed.ledger.probe_invocation_count, 0);
       assert.equal(result.parsed.ledger.editor_close_attempt_count <= 1, true);
@@ -1583,6 +1991,7 @@ test('Stage D: open failures pre-consume open and finally close at most once', a
       assert.equal(result.fake.calls.closeActionCalls <= 1, true);
       assert.equal(result.parsed.ledger.retry_count, 0);
       assert.equal(result.parsed.ledger.fallback_count, 0);
+      assert.doesNotMatch(result.state.stdoutWrites[0], /RAW_OPEN/);
     });
   }
 });
@@ -1654,10 +2063,13 @@ test('Stage D: detach throw/timeout is sanitized and never retries', async (t) =
 
 test('Stage D: fixed open and close closures call only the approved bottom-widget methods once', async () => {
   const result = await runDScenario('success');
+  const capabilityParams = result.fake.calls.callFunctionOn.find((params) =>
+    classifyDeclaration(params.functionDeclaration, result.probeDeclaration) === 'close-capability');
   const openParams = result.fake.calls.callFunctionOn.find((params) =>
     classifyDeclaration(params.functionDeclaration, result.probeDeclaration) === 'open');
   const closeParams = result.fake.calls.callFunctionOn.find((params) =>
     classifyDeclaration(params.functionDeclaration, result.probeDeclaration) === 'close');
+  assert.ok(capabilityParams);
   assert.ok(openParams);
   assert.ok(closeParams);
   const calls = { activate: 0, click: 0, focus: 0, hide: 0, input: 0, show: 0 };
@@ -1672,14 +2084,27 @@ test('Stage D: fixed open and close closures call only the approved bottom-widge
       },
     },
   };
+  assert.equal(vm.runInNewContext(`(${capabilityParams.functionDeclaration})()`, sandbox), true);
   assert.equal(vm.runInNewContext(`(${openParams.functionDeclaration})()`, sandbox), true);
   assert.equal(vm.runInNewContext(`(${closeParams.functionDeclaration})()`, sandbox), true);
   assert.deepEqual(calls, { activate: 1, click: 0, focus: 0, hide: 1, input: 0, show: 0 });
 
   assert.equal(vm.runInNewContext(`(${openParams.functionDeclaration})()`, { window: {} }), false);
+  assert.equal(vm.runInNewContext(`(${capabilityParams.functionDeclaration})()`, { window: {} }), false);
+  assert.equal(vm.runInNewContext(`(${capabilityParams.functionDeclaration})()`, {
+    window: {
+      TradingView: {
+        get bottomWidgetBar() { throw new Error('RAW_CAPABILITY_GETTER_SENTINEL'); },
+      },
+    },
+  }), false);
   assert.equal(vm.runInNewContext(`(${closeParams.functionDeclaration})()`, { window: {} }), false);
   assert.doesNotMatch(openParams.functionDeclaration, /showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/);
   assert.doesNotMatch(closeParams.functionDeclaration, /showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/);
+  assert.doesNotMatch(
+    capabilityParams.functionDeclaration,
+    /hideWidget\s*\(|activateScriptEditorTab\s*\(|showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/,
+  );
 });
 
 test('Stage D: visibility read failures never fabricate a CLOSED observation', async (t) => {
@@ -1726,29 +2151,18 @@ test('Stage D: visibility read failures never fabricate a CLOSED observation', a
     });
   }
 
-  await t.test('open visibility query failure remains UNKNOWN when cleanup cannot prove false', async (subtest) => {
-    const timerObserver = { pendingDelay100: 0 };
-    subtest.mock.timers.enable({ apis: ['setTimeout'] });
-    try {
-      const result = await settleWithLogicalTimerTicks(
-        runDScenario('open-visibility-query-throw', { timerObserver }),
-        subtest.mock.timers,
-        timerObserver,
-        'open-visibility-query-throw',
-      );
-      assert.equal(result.exitCode, 1);
-      assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.OPEN);
-      assert.equal(result.parsed.editor_residual_state, 'UNKNOWN');
-      assertExactLedger(result.parsed, 1, 0, 1);
-      assert.equal(result.parsed.probe, null);
-      assert.equal(result.fake.calls.openActionCalls, 1);
-      assert.equal(result.fake.calls.closeActionCalls, 1);
-      assert.equal(result.parsed.ledger.retry_count, 0);
-      assert.equal(result.parsed.ledger.fallback_count, 0);
-      assert.doesNotMatch(result.state.stdoutWrites[0], /RAW_VISIBILITY_QUERY_SENTINEL/);
-    } finally {
-      subtest.mock.timers.reset();
-    }
+  await t.test('open visibility query failure remains UNKNOWN when cleanup cannot prove false', async () => {
+    const result = await runDScenario('open-visibility-query-throw');
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.OPEN_PROTOCOL);
+    assert.equal(result.parsed.editor_residual_state, 'UNKNOWN');
+    assertExactLedger(result.parsed, 1, 0, 1);
+    assert.equal(result.parsed.probe, null);
+    assert.equal(result.fake.calls.openActionCalls, 1);
+    assert.equal(result.fake.calls.closeActionCalls, 1);
+    assert.equal(result.parsed.ledger.retry_count, 0);
+    assert.equal(result.parsed.ledger.fallback_count, 0);
+    assert.doesNotMatch(result.state.stdoutWrites[0], /RAW_VISIBILITY_QUERY_SENTINEL/);
   });
 
   await t.test('postflight visibility query failure stays UNKNOWN through detach failure', async () => {
@@ -1774,32 +2188,21 @@ test('Stage D: each visibility direction may poll eight times while its action r
     ['visibility-open-delayed', 8, 1],
     ['visibility-close-delayed', 1, 8],
   ]) {
-    await t.test(mode, async (subtest) => {
-      const timerObserver = { pendingDelay100: 0 };
-      subtest.mock.timers.enable({ apis: ['setTimeout'] });
-      try {
-        const result = await settleWithLogicalTimerTicks(
-          runDScenario(mode, { timerObserver }),
-          subtest.mock.timers,
-          timerObserver,
-          mode,
-        );
-        assert.equal(result.exitCode, 0, JSON.stringify({
-          errorCode: result.parsed?.error_code,
-          openReads: result.fake.calls.visibilityAfterOpen,
-          closeReads: result.fake.calls.visibilityAfterClose,
-          timerCalls: result.state.timerCalls,
-        }));
-        assertExactLedger(result.parsed, 1, 1, 1);
-        assert.equal(result.fake.calls.openActionCalls, 1);
-        assert.equal(result.fake.calls.closeActionCalls, 1);
-        assert.equal(result.fake.calls.visibilityAfterOpen, openReads);
-        assert.equal(result.fake.calls.visibilityAfterClose, closeReads);
-        assert.equal(result.fake.calls.inputCalls, 0);
-        assert.equal(result.fake.calls.showWidgetCalls, 0);
-      } finally {
-        subtest.mock.timers.reset();
-      }
+    await t.test(mode, async () => {
+      const result = await runDScenario(mode);
+      assert.equal(result.exitCode, 0, JSON.stringify({
+        errorCode: result.parsed?.error_code,
+        openReads: result.fake.calls.visibilityAfterOpen,
+        closeReads: result.fake.calls.visibilityAfterClose,
+        timerCalls: result.state.timerCalls,
+      }));
+      assertExactLedger(result.parsed, 1, 1, 1);
+      assert.equal(result.fake.calls.openActionCalls, 1);
+      assert.equal(result.fake.calls.closeActionCalls, 1);
+      assert.equal(result.fake.calls.visibilityAfterOpen, openReads);
+      assert.equal(result.fake.calls.visibilityAfterClose, closeReads);
+      assert.equal(result.fake.calls.inputCalls, 0);
+      assert.equal(result.fake.calls.showWidgetCalls, 0);
     });
   }
 });
@@ -1872,7 +2275,7 @@ test('Stage E: captures one default unique context and verifies target/frame/con
     'Runtime.executionContextDestroyed',
     'Runtime.executionContextsCleared',
   ].sort());
-  const majorActions = ['preflight', 'open', 'probe', 'close', 'postflight'];
+  const majorActions = ['preflight', 'close-capability', 'open', 'probe', 'close', 'postflight'];
   for (const action of majorActions) {
     const position = result.fake.calls.trace.indexOf(action);
     assert.notEqual(position, -1, `${action} must execute`);
@@ -1959,10 +2362,10 @@ test('Stage F: child fault/hang matrix emits one sanitized SafeMain line within 
     ['frame-tree-hang', 1, EXPECTED_ERROR_CODES.DEADLINE, 0, 0, 0, 'UNKNOWN'],
     ['context-wait-hang', 1, EXPECTED_ERROR_CODES.DEADLINE, 0, 0, 0, 'UNKNOWN'],
     ['loader-hang', 70, EXPECTED_ERROR_CODES.HARD_DEADLINE, 0, 0, 0, 'UNKNOWN'],
-    ['open-hang', 1, EXPECTED_ERROR_CODES.DEADLINE, 1, 0, 1, 'CLOSED'],
+    ['open-hang', 1, EXPECTED_ERROR_CODES.OPEN_DEADLINE, 1, 0, 1, 'CLOSED'],
     ['probe-hang', 1, EXPECTED_ERROR_CODES.DEADLINE, 1, 1, 1, 'CLOSED'],
     ['close-hang', 1, EXPECTED_ERROR_CODES.DEADLINE, 1, 1, 1, 'UNKNOWN'],
-    ['work-abort', 1, EXPECTED_ERROR_CODES.DEADLINE, 1, 0, 1, 'CLOSED'],
+    ['work-abort', 1, EXPECTED_ERROR_CODES.OPEN_DEADLINE, 1, 0, 1, 'CLOSED'],
     ['hard-during-cleanup', 70, EXPECTED_ERROR_CODES.HARD_DEADLINE, 1, 1, 1, 'UNKNOWN'],
     ['matrix-invalid', 1, EXPECTED_ERROR_CODES.INTERNAL, 1, 1, 0, 'UNKNOWN'],
   ];
@@ -2003,7 +2406,7 @@ test('Stage F: child fault/hang matrix emits one sanitized SafeMain line within 
 test('Stage F: exact phase matrix preserves major rows and rejects phase-invalid combinations', async (t) => {
   const positiveCases = [
     ['preflight', 'preflight-false', {}, EXPECTED_ERROR_CODES.PREFLIGHT, 0, 0, 0, 'UNKNOWN', false],
-    ['open', 'open-throw', {}, EXPECTED_ERROR_CODES.OPEN, 1, 0, 1, 'CLOSED', false],
+    ['open', 'open-throw', {}, EXPECTED_ERROR_CODES.OPEN_PROTOCOL, 1, 0, 1, 'CLOSED', false],
     ['probe', 'probe-throw', {}, EXPECTED_ERROR_CODES.PROTOCOL, 1, 1, 1, 'CLOSED', false],
     ['close', 'close-false', {}, EXPECTED_ERROR_CODES.CLOSE, 1, 1, 1, 'UNKNOWN', true],
     [
@@ -2101,7 +2504,7 @@ test('Stage F: exact phase matrix preserves major rows and rejects phase-invalid
     [
       'pre-probe identity timeout keeps OPEN and cleanup succeeds',
       { boundary: 'pre-probe', kind: 'timeout', cleanup: 'success' },
-      EXPECTED_ERROR_CODES.DEADLINE,
+      EXPECTED_ERROR_CODES.OPEN_DEADLINE,
       1,
       1,
       'CLOSED',
@@ -2130,7 +2533,7 @@ test('Stage F: exact phase matrix preserves major rows and rejects phase-invalid
   await t.test('OPEN phase never serializes OPEN from a cleanup visibility proof', async () => {
     const result = await runDScenario('open-throw-close-visible');
     assert.equal(result.exitCode, 1);
-    assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.OPEN);
+    assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.OPEN_PROTOCOL);
     assert.equal(result.parsed.editor_residual_state, 'UNKNOWN');
     assertExactLedger(result.parsed, 1, 0, 1);
     assert.equal(result.fake.calls.closeActionCalls, 1);
@@ -2174,10 +2577,15 @@ test('Stage F: stdout callback and mapped fallback each produce one write and on
     mode: 'success',
     probeDeclaration: importOnly.namespace.PROBE_FUNCTION_DECLARATION,
   });
+  const successApproval = await createApprovalFixture(digest);
   const successFallback = await runArtifactCli(
     [`--bundle-sha256=${digest}`],
-    { dynamicDefault: fake.cdp, stdoutCallbackMode: 'never' },
-  );
+    {
+      dynamicDefault: fake.cdp,
+      stdoutCallbackMode: 'never',
+      env: { PINE_DISCOVERY_APPROVAL_FILE: successApproval.approvalPath },
+    },
+  ).finally(() => cleanupApprovalFixture(successApproval));
   assert.equal(successFallback.exitCode, 0);
   assert.equal(successFallback.state.stdoutWrites.length, 1);
   assert.deepEqual(successFallback.state.exits, [0]);
@@ -2191,23 +2599,25 @@ test('Stage F: total hard owner emits truthful once-only snapshot before a late 
     mode: 'success',
     probeDeclaration: importOnly.namespace.PROBE_FUNCTION_DECLARATION,
   });
+  const fixture = await createApprovalFixture(digest);
   const result = await runArtifactCli(
     [`--bundle-sha256=${digest}`],
     {
+      env: { PINE_DISCOVERY_APPROVAL_FILE: fixture.approvalPath },
       dynamicModuleFactory: (context) => new Promise((resolveModule) => {
         globalThis.setTimeout(async () => {
           resolveModule(await createDynamicCdpModule(context, fake.cdp));
-        }, 40);
+        }, 400);
       }),
     },
-  );
+  ).finally(() => cleanupApprovalFixture(fixture));
   assert.equal(result.exitCode, 70);
   assertSafeMainShape(result.parsed);
   assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.HARD_DEADLINE);
   assertExactLedger(result.parsed, 0, 0, 0);
   assert.equal(result.parsed.probe, null);
   assert.equal(result.parsed.editor_residual_state, 'UNKNOWN');
-  await new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, 60));
+  await new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, 450));
   assert.equal(result.state.stdoutWrites.length, 1);
   assert.deepEqual(result.state.exits, [70]);
   assert.deepEqual(result.state.stderrWrites, []);
@@ -2220,7 +2630,7 @@ test('Stage F: source exposes fixed production deadlines only and no override ch
   }
   assert.doesNotMatch(
     source,
-    /process\.env|--(?:operation|work|cleanup|hard|flush|timer|deadline)|setTimeout\s*:\s*|clearTimeout\s*:\s*/,
+    /process\.env(?!\[APPROVAL_FILE_ENV\])|--(?:operation|work|cleanup|hard|flush|timer|deadline)|setTimeout\s*:\s*|clearTimeout\s*:\s*/,
   );
   assert.doesNotMatch(source, /export\s+(?:async\s+)?function\s+(?:runCli|executeMain|createLiveAdapter)/);
 });

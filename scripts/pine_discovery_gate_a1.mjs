@@ -1,12 +1,17 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readFile, readlink, stat } from 'node:fs/promises';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { types } from 'node:util';
 
 void types;
 
 const actualReadFile = readFile;
+const APPROVAL_FILE_ENV = 'PINE_DISCOVERY_APPROVAL_FILE';
+const APPROVAL_MAX_TTL_MS = 5 * 60 * 1000;
+const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SPENT_STATE_COMPONENTS = Object.freeze(['tradingview-mcp-gate-a1', 'spent']);
 
 export const PROBE_TARGET = Object.freeze({
   id: '119DB9629A03197CFB120366EA6729CC',
@@ -73,7 +78,14 @@ export const PROBE_ERROR_CODES = Object.freeze({
   CONNECT: 'PINE_DISCOVERY_CONNECT',
   CONTEXT_CHANGED: 'PINE_DISCOVERY_CONTEXT_CHANGED',
   PREFLIGHT: 'PINE_DISCOVERY_PREFLIGHT',
+  CLOSE_CAPABILITY: 'PINE_DISCOVERY_CLOSE_CAPABILITY',
   OPEN: 'PINE_DISCOVERY_OPEN',
+  OPEN_ACTION_REJECTED: 'PINE_DISCOVERY_OPEN_ACTION_REJECTED',
+  OPEN_NON_BOOLEAN: 'PINE_DISCOVERY_OPEN_NON_BOOLEAN',
+  OPEN_VISIBILITY_UNPROVEN: 'PINE_DISCOVERY_OPEN_VISIBILITY_UNPROVEN',
+  OPEN_PROTOCOL: 'PINE_DISCOVERY_OPEN_PROTOCOL',
+  OPEN_PAGE: 'PINE_DISCOVERY_OPEN_PAGE',
+  OPEN_DEADLINE: 'PINE_DISCOVERY_OPEN_DEADLINE',
   PROTOCOL: 'PINE_DISCOVERY_PROTOCOL',
   PAGE: 'PINE_DISCOVERY_PAGE',
   INVALID: 'PINE_DISCOVERY_RESULT_INVALID',
@@ -84,6 +96,7 @@ export const PROBE_ERROR_CODES = Object.freeze({
   HARD_DEADLINE: 'PINE_DISCOVERY_HARD_DEADLINE',
   INTERNAL: 'PINE_DISCOVERY_INTERNAL',
   DIGEST: 'PINE_DISCOVERY_DIGEST',
+  APPROVAL: 'PINE_DISCOVERY_APPROVAL',
 });
 
 function pineSignalDiscoveryMainWorld() {
@@ -437,6 +450,16 @@ const PREFLIGHT_FUNCTION_DECLARATION = (function gateA0PreflightMainWorld() {
   }
 }).toString();
 
+const CLOSE_CAPABILITY_FUNCTION_DECLARATION = (function gateA1CloseCapabilityMainWorld() {
+  'gate-a1-close-capability-v1';
+  try {
+    const bar = window.TradingView && window.TradingView.bottomWidgetBar;
+    return Boolean(bar && typeof bar.hideWidget === 'function');
+  } catch {
+    return false;
+  }
+}).toString();
+
 const OPEN_FUNCTION_DECLARATION = (function gateA0OpenMainWorld() {
   'gate-a0-open-v1';
   try {
@@ -527,6 +550,7 @@ const RUN_PHASE = Object.freeze({
   SUCCESS: 'SUCCESS',
   ARGUMENT: 'ARGUMENT',
   DIGEST: 'DIGEST',
+  APPROVAL: 'APPROVAL',
   MODULE: 'MODULE',
   SELECTION: 'SELECTION',
   CONNECT: 'CONNECT',
@@ -596,7 +620,254 @@ export async function buildApprovalEnvelope(readFileFn) {
     total_hard_deadline_ms: TOTAL_HARD_DEADLINE_MS,
     hard_exit_cleanup_limit: HARD_EXIT_CLEANUP_LIMIT,
     tradingview_page_initiated_network: 'UNKNOWN',
+    approval: {
+      schema_version: 1,
+      secret_ingress_env: APPROVAL_FILE_ENV,
+      file_mode: '0600',
+      nonce_format: '64 lowercase hexadecimal characters',
+      issued_at: 'strict ISO-8601 UTC timestamp supplied by approver',
+      expires_at: 'strict ISO-8601 UTC timestamp supplied by approver',
+      max_ttl_ms: APPROVAL_MAX_TTL_MS,
+      one_shot: true,
+    },
   };
+}
+
+function exactJsonObject(value, keys) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const expected = keys.slice().sort();
+  return actual.length === expected.length
+    && actual.every((key, index) => key === expected[index]);
+}
+
+function strictUtcTimestamp(value) {
+  if (typeof value !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? parsed : null;
+}
+
+function approvalMatches(value, bundleSha256, nowMs) {
+  const topKeys = [
+    'schema_version', 'nonce', 'bundle_sha256', 'target_id', 'exact_command',
+    'issued_at', 'expires_at', 'initial_tuple', 'budgets',
+  ];
+  if (!exactJsonObject(value, topKeys)
+    || value.schema_version !== 1
+    || typeof value.nonce !== 'string'
+    || !/^[a-f0-9]{64}$/.test(value.nonce)
+    || value.bundle_sha256 !== bundleSha256
+    || value.target_id !== PROBE_TARGET.id
+    || value.exact_command
+      !== `node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=${bundleSha256}`
+    || !exactJsonObject(value.initial_tuple, [
+      'symbol', 'resolution', 'chart_type', 'study_count', 'shape_count',
+      'replay_started', 'bottom_widget_open', 'pine_editor_open',
+    ])
+    || !exactJsonObject(value.budgets, ['open', 'probe', 'close', 'retry', 'fallback'])) {
+    return false;
+  }
+  for (const [key, expected] of Object.entries(PROBE_TARGET)) {
+    if (key !== 'id' && value.initial_tuple[key] !== expected) return false;
+  }
+  for (const [key, expected] of Object.entries(PROBE_BUDGET)) {
+    if (value.budgets[key] !== expected) return false;
+  }
+  const issuedAt = strictUtcTimestamp(value.issued_at);
+  const expiresAt = strictUtcTimestamp(value.expires_at);
+  return issuedAt !== null && expiresAt !== null
+    && issuedAt <= nowMs
+    && expiresAt > nowMs
+    && expiresAt > issuedAt
+    && expiresAt - issuedAt <= APPROVAL_MAX_TTL_MS;
+}
+
+async function secureParentDirectory(path) {
+  const parent = dirname(path);
+  const components = parent.split('/').filter((component) => component.length > 0);
+  let current = '/';
+  for (const component of components) {
+    current = resolve(current, component);
+    const metadata = await lstat(current);
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) return null;
+  }
+  const directory = await open(
+    parent,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    const directoryMetadata = await directory.stat();
+    if (!directoryMetadata.isDirectory()) {
+      await directory.close();
+      return null;
+    }
+    const anchor = `/proc/self/fd/${directory.fd}`;
+    const anchorTarget = await readlink(anchor);
+    const anchorMetadata = await stat(anchor);
+    if (typeof anchorTarget !== 'string' || !anchorTarget.startsWith('/')
+      || anchorMetadata.dev !== directoryMetadata.dev
+      || anchorMetadata.ino !== directoryMetadata.ino) {
+      await directory.close();
+      return null;
+    }
+    return { anchor, directory, directoryMetadata, parent };
+  } catch {
+    await directory.close();
+    throw fixedError(PROBE_ERROR_CODES.APPROVAL);
+  }
+}
+
+async function readSmallStrictPath(path) {
+  const metadata = await lstat(path);
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 1 || metadata.size > 4096) {
+    return null;
+  }
+  const text = await readFile(path, 'utf8');
+  if (text.includes('\0') || text.includes('\r') || text.split('\n').filter(Boolean).length !== 1) {
+    return null;
+  }
+  return text.trim();
+}
+
+async function gitCommonDirectory() {
+  const dotGit = resolve(REPOSITORY_ROOT, '.git');
+  const dotGitMetadata = await lstat(dotGit);
+  let gitDirectory;
+  if (dotGitMetadata.isDirectory() && !dotGitMetadata.isSymbolicLink()) {
+    gitDirectory = dotGit;
+  } else if (dotGitMetadata.isFile() && !dotGitMetadata.isSymbolicLink()) {
+    const declaration = await readSmallStrictPath(dotGit);
+    const match = declaration && /^gitdir: (.+)$/.exec(declaration);
+    if (!match) return null;
+    gitDirectory = resolve(REPOSITORY_ROOT, match[1]);
+  } else {
+    return null;
+  }
+  const securedGitDirectory = await secureParentDirectory(resolve(gitDirectory, 'anchor'));
+  if (securedGitDirectory === null) return null;
+  await securedGitDirectory.directory.close();
+  let commonDirectory = gitDirectory;
+  try {
+    const declaration = await readSmallStrictPath(resolve(gitDirectory, 'commondir'));
+    if (declaration === null) return null;
+    commonDirectory = resolve(gitDirectory, declaration);
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') return null;
+  }
+  const commonMetadata = await lstat(commonDirectory);
+  if (!commonMetadata.isDirectory() || commonMetadata.isSymbolicLink()) return null;
+  return commonDirectory;
+}
+
+async function secureSpentStateDirectory() {
+  const commonDirectory = await gitCommonDirectory();
+  if (commonDirectory === null) return null;
+  let current = commonDirectory;
+  for (const component of SPENT_STATE_COMPONENTS) {
+    current = resolve(current, component);
+    try {
+      await mkdir(current, { mode: 0o700 });
+    } catch (error) {
+      if (!error || error.code !== 'EEXIST') return null;
+    }
+    const metadata = await lstat(current);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()
+      || (metadata.mode & 0o777) !== 0o700) return null;
+  }
+  return secureParentDirectory(resolve(current, 'anchor'));
+}
+
+export async function consumeApprovalLease(approvalPath, bundleSha256, nowMs = Date.now()) {
+  let approvalHandle;
+  let parentHandle;
+  let stateHandle;
+  try {
+    if (typeof approvalPath !== 'string' || !approvalPath.startsWith('/')
+      || typeof bundleSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(bundleSha256)
+      || !Number.isFinite(nowMs)) return false;
+    const parent = dirname(approvalPath);
+    const approvalName = basename(approvalPath);
+    if (approvalName.length === 0 || resolve(parent, approvalName) !== approvalPath) return false;
+    const securedParent = await secureParentDirectory(approvalPath);
+    if (securedParent === null) return false;
+    parentHandle = securedParent.directory;
+    const anchoredApprovalPath = `${securedParent.anchor}/${approvalName}`;
+    approvalHandle = await open(
+      anchoredApprovalPath,
+      constants.O_RDONLY | constants.O_NOFOLLOW,
+    );
+    const metadata = await approvalHandle.stat();
+    if (!metadata.isFile() || (metadata.mode & 0o777) !== 0o600
+      || metadata.size === 0 || metadata.size > 8192) return false;
+    const bytes = await approvalHandle.readFile();
+    if (bytes.length !== metadata.size) return false;
+    let approval;
+    try {
+      approval = JSON.parse(bytes.toString('utf8'));
+    } catch {
+      return false;
+    }
+    if (!approvalMatches(approval, bundleSha256, nowMs)) return false;
+    const currentMetadata = await lstat(anchoredApprovalPath);
+    if (currentMetadata.isSymbolicLink()
+      || currentMetadata.dev !== metadata.dev
+      || currentMetadata.ino !== metadata.ino) return false;
+    const nonceHash = createHash('sha256').update(approval.nonce).digest('hex');
+    const envelopeHash = createHash('sha256').update(bytes).digest('hex');
+    const currentParentMetadata = await lstat(parent);
+    if (currentParentMetadata.isSymbolicLink()
+      || currentParentMetadata.dev !== securedParent.directoryMetadata.dev
+      || currentParentMetadata.ino !== securedParent.directoryMetadata.ino) return false;
+    const securedState = await secureSpentStateDirectory();
+    if (securedState === null) return false;
+    stateHandle = securedState.directory;
+    const spentPath = `${securedState.anchor}/${nonceHash}.json`;
+    const markerHandle = await open(
+      spentPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      const marker = JSON.stringify({
+        schema_version: 1,
+        nonce_digest: nonceHash,
+        envelope_digest: envelopeHash,
+        issued_at: approval.issued_at,
+        expires_at: approval.expires_at,
+      });
+      await markerHandle.writeFile(marker);
+      await markerHandle.sync();
+    } finally {
+      await markerHandle.close();
+    }
+    await stateHandle.sync();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (approvalHandle) {
+      try {
+        await approvalHandle.close();
+      } catch {
+        // The spent marker, if created, remains authoritative.
+      }
+    }
+    if (parentHandle) {
+      try {
+        await parentHandle.close();
+      } catch {
+        // The spent marker, if created, remains authoritative.
+      }
+    }
+    if (stateHandle) {
+      try {
+        await stateHandle.close();
+      } catch {
+        // The spent marker, if created, remains authoritative.
+      }
+    }
+  }
 }
 
 function invalidProbeResult() {
@@ -914,6 +1185,9 @@ function safeMainCombination(payload, hasProbe, phase, visibilityEvidence) {
     case RUN_PHASE.DIGEST:
       return payload.error_code === PROBE_ERROR_CODES.DIGEST
         && open === 0 && probe === 0 && close === 0 && !hasProbe;
+    case RUN_PHASE.APPROVAL:
+      return payload.error_code === PROBE_ERROR_CODES.APPROVAL
+        && open === 0 && probe === 0 && close === 0 && !hasProbe;
     case RUN_PHASE.MODULE:
       return payload.error_code === PROBE_ERROR_CODES.MODULE
         && open === 0 && probe === 0 && close === 0 && !hasProbe;
@@ -924,14 +1198,20 @@ function safeMainCombination(payload, hasProbe, phase, visibilityEvidence) {
       return payload.error_code === PROBE_ERROR_CODES.CONNECT
         && open === 0 && probe === 0 && close === 0 && !hasProbe;
     case RUN_PHASE.PREFLIGHT:
-      return payload.error_code === PROBE_ERROR_CODES.PREFLIGHT
+      return (payload.error_code === PROBE_ERROR_CODES.PREFLIGHT
+          || payload.error_code === PROBE_ERROR_CODES.CLOSE_CAPABILITY)
         && open === 0 && probe === 0 && close === 0 && !hasProbe;
     case RUN_PHASE.BEFORE_OPEN:
       return (payload.error_code === PROBE_ERROR_CODES.CONTEXT_CHANGED
           || payload.error_code === PROBE_ERROR_CODES.DEADLINE)
         && open === 0 && probe === 0 && close === 0 && !hasProbe;
     case RUN_PHASE.OPEN:
-      return (payload.error_code === PROBE_ERROR_CODES.OPEN
+      return (payload.error_code === PROBE_ERROR_CODES.OPEN_ACTION_REJECTED
+          || payload.error_code === PROBE_ERROR_CODES.OPEN_NON_BOOLEAN
+          || payload.error_code === PROBE_ERROR_CODES.OPEN_VISIBILITY_UNPROVEN
+          || payload.error_code === PROBE_ERROR_CODES.OPEN_PROTOCOL
+          || payload.error_code === PROBE_ERROR_CODES.OPEN_PAGE
+          || payload.error_code === PROBE_ERROR_CODES.OPEN_DEADLINE
           || payload.error_code === PROBE_ERROR_CODES.CONTEXT_CHANGED
           || payload.error_code === PROBE_ERROR_CODES.DEADLINE)
         && open === 1 && probe === 0 && (close === 0 || close === 1) && !hasProbe;
@@ -1319,7 +1599,7 @@ async function verifyIdentity(client, state) {
 
 async function callMainWorld(client, functionDeclaration, state) {
   const before = await verifyIdentity(client, state);
-  if (!before.ok) return before;
+  if (!before.ok) return { ...before, identityCheck: true };
   const invoked = await finiteOperation(() => client.Runtime.callFunctionOn({
     functionDeclaration,
     uniqueContextId: state.identity.uniqueId,
@@ -1328,7 +1608,7 @@ async function callMainWorld(client, functionDeclaration, state) {
     objectGroup: OBJECT_GROUP,
   }), state.operationSignal);
   const after = await verifyIdentity(client, state);
-  if (!after.ok) return after;
+  if (!after.ok) return { ...after, identityCheck: true };
   return invoked;
 }
 
@@ -1407,13 +1687,21 @@ async function attemptOpen(client, progress, state) {
       errorCode: action.contextChanged
         ? PROBE_ERROR_CODES.CONTEXT_CHANGED
         : action.deadline
-          ? PROBE_ERROR_CODES.DEADLINE
-          : PROBE_ERROR_CODES.OPEN,
+          ? PROBE_ERROR_CODES.OPEN_DEADLINE
+          : PROBE_ERROR_CODES.OPEN_PROTOCOL,
     };
   }
   const decoded = remoteBoolean(action.value);
-  if (!decoded.ok || decoded.value !== true) {
-    return { ok: false, errorCode: PROBE_ERROR_CODES.OPEN };
+  if (!decoded.ok) {
+    return {
+      ok: false,
+      errorCode: decoded.page
+        ? PROBE_ERROR_CODES.OPEN_PAGE
+        : PROBE_ERROR_CODES.OPEN_NON_BOOLEAN,
+    };
+  }
+  if (decoded.value !== true) {
+    return { ok: false, errorCode: PROBE_ERROR_CODES.OPEN_ACTION_REJECTED };
   }
   const visible = await pollVisibility(client, true, state);
   if (!visible.ok) {
@@ -1423,9 +1711,14 @@ async function attemptOpen(client, progress, state) {
     return {
       ok: false,
       errorCode: visible.errorCode === PROBE_ERROR_CODES.CONTEXT_CHANGED
-        || visible.errorCode === PROBE_ERROR_CODES.DEADLINE
-        ? visible.errorCode
-        : PROBE_ERROR_CODES.OPEN,
+        ? PROBE_ERROR_CODES.CONTEXT_CHANGED
+        : visible.errorCode === PROBE_ERROR_CODES.DEADLINE
+          ? PROBE_ERROR_CODES.OPEN_DEADLINE
+          : visible.errorCode === PROBE_ERROR_CODES.PAGE
+            ? PROBE_ERROR_CODES.OPEN_PAGE
+            : visible.errorCode === PROBE_ERROR_CODES.PROTOCOL
+              ? PROBE_ERROR_CODES.OPEN_PROTOCOL
+              : PROBE_ERROR_CODES.OPEN_VISIBILITY_UNPROVEN,
     };
   }
   state.visibilityEvidence = VISIBILITY_EVIDENCE.OPEN;
@@ -1628,6 +1921,30 @@ async function runNormalProbeFlow(cdp, progress, state) {
     return { ok: false, errorCode: PROBE_ERROR_CODES.PREFLIGHT, probe: null };
   }
   state.visibilityEvidence = VISIBILITY_EVIDENCE.CLOSED;
+
+  const closeCapability = await callMainWorld(
+    client,
+    CLOSE_CAPABILITY_FUNCTION_DECLARATION,
+    state,
+  );
+  if (!closeCapability.ok) {
+    if (closeCapability.contextChanged || closeCapability.identityCheck) {
+      state.phase = RUN_PHASE.BEFORE_OPEN;
+    }
+    return {
+      ok: false,
+      errorCode: closeCapability.contextChanged
+        ? PROBE_ERROR_CODES.CONTEXT_CHANGED
+        : closeCapability.identityCheck && closeCapability.deadline
+          ? PROBE_ERROR_CODES.DEADLINE
+          : PROBE_ERROR_CODES.CLOSE_CAPABILITY,
+      probe: null,
+    };
+  }
+  const closeCapabilityValue = remoteBoolean(closeCapability.value);
+  if (!closeCapabilityValue.ok || closeCapabilityValue.value !== true) {
+    return { ok: false, errorCode: PROBE_ERROR_CODES.CLOSE_CAPABILITY, probe: null };
+  }
 
   state.phase = RUN_PHASE.BEFORE_OPEN;
   const opened = await attemptOpen(client, progress, state);
@@ -1858,6 +2175,25 @@ async function executeMain(argv, progress) {
           VISIBILITY_EVIDENCE.UNKNOWN,
         ),
         phase: RUN_PHASE.DIGEST,
+        visibilityEvidence: VISIBILITY_EVIDENCE.UNKNOWN,
+        exitCode: 1,
+      };
+    }
+
+    const approvalConsumed = await consumeApprovalLease(
+      process.env[APPROVAL_FILE_ENV],
+      actualDigest,
+    );
+    if (!approvalConsumed) {
+      return {
+        kind: 'main',
+        payload: safeFailure(
+          PROBE_ERROR_CODES.APPROVAL,
+          progress,
+          RUN_PHASE.APPROVAL,
+          VISIBILITY_EVIDENCE.UNKNOWN,
+        ),
+        phase: RUN_PHASE.APPROVAL,
         visibilityEvidence: VISIBILITY_EVIDENCE.UNKNOWN,
         exitCode: 1,
       };
