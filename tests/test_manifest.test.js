@@ -26,6 +26,7 @@ function isLiveTest(file) {
 const LIVE_TESTS = ALL_TESTS.filter(isLiveTest);
 const UNIT_TESTS = ALL_TESTS.filter(file => !isLiveTest(file));
 const PINE_FACADE_E2E = 'tests/pine_facade_e2e.test.js';
+const COORDINATOR = 'tests/test-coordinator.mjs';
 
 const REMOTE_INTEGRATION_PATTERNS = [
   {
@@ -87,6 +88,10 @@ function configuredImports(scriptName) {
   return imports.map(file => file.replace(/^\.\//, ''));
 }
 
+function invokesCoordinator(scriptName) {
+  return tokenize(PACKAGE.scripts[scriptName]).includes(COORDINATOR);
+}
+
 function remoteIntegrationCases(file) {
   const source = readFileSync(join(ROOT, file), 'utf8');
   const cases = [];
@@ -141,32 +146,33 @@ describe('test manifest — package gates', () => {
     assertExactSelection('test:unit', UNIT_TESTS);
   });
 
-  it('test:e2e selects every live test exactly once', () => {
-    assertExactSelection('test:e2e', LIVE_TESTS);
+  it('test:e2e routes through the coordinator without selecting live files', () => {
+    assert.equal(invokesCoordinator('test:e2e'), true);
+    assert.deepEqual(selectedTests('test:e2e'), []);
   });
 
-  it('primary test selects every test exactly once', () => {
-    assertExactSelection('test', ALL_TESTS);
+  it('primary test routes only through the coordinator', () => {
+    assert.equal(invokesCoordinator('test'), true);
+    assert.deepEqual(selectedTests('test'), []);
   });
 
-  it('test:all selects every test exactly once', () => {
-    assertExactSelection('test:all', ALL_TESTS);
+  it('test:all routes through the coordinator without selecting live files', () => {
+    assert.equal(invokesCoordinator('test:all'), true);
+    assert.deepEqual(selectedTests('test:all'), []);
   });
 
-  it('every multi-live gate fixes Node test-file concurrency at one', () => {
-    for (const scriptName of ['test', 'test:e2e', 'test:all']) {
-      assert.ok(LIVE_TESTS.length > 1, 'fixture must contain multiple live test files');
-      assert.equal(configuredConcurrency(scriptName), 1, `${scriptName} must use --test-concurrency=1`);
+  it('broad helper gates do not bypass the coordinator into live tests', () => {
+    for (const scriptName of ['test', 'test:e2e', 'test:all', 'test:verbose', 'test:count']) {
+      assert.equal(invokesCoordinator(scriptName), true, `${scriptName} must use the coordinator`);
+      assert.deepEqual(selectedTests(scriptName), [], `${scriptName} must not select test files directly`);
     }
   });
 
-  it('every gate containing VM-module tests enables the required Node runtime flag', () => {
-    for (const scriptName of ['test', 'test:unit', 'test:all']) {
-      assert.ok(
-        tokenize(PACKAGE.scripts[scriptName]).includes('--experimental-vm-modules'),
-        `${scriptName} must use --experimental-vm-modules`,
-      );
-    }
+  it('the offline unit gate enables the required Node runtime flag', () => {
+    assert.ok(
+      tokenize(PACKAGE.scripts['test:unit']).includes('--experimental-vm-modules'),
+      'test:unit must use --experimental-vm-modules',
+    );
   });
 
   it('test:unit preloads the offline network guard', () => {
