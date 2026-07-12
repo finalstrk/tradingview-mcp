@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { mkdir, open, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,6 +9,274 @@ const ROOT = dirname(TEST_DIR);
 const OFFLINE_GUARD = join(TEST_DIR, 'offline_network_guard.js');
 
 export const COORDINATOR_SAFE_STOP_CODE = 'OFFLINE_APPROVAL_REQUIRED';
+export const GATE_B_SCHEMA_VERSION = 1;
+export const COORDINATOR_VERSION = 'gate-b-offline-v1';
+export const GATE_B_COMMAND = 'npm test';
+
+export const GATE_B_BUDGETS = Object.freeze({
+  page_reload_count: 0,
+  pine_facade_post_count: 6,
+  harness_initiated_network_count: 6,
+  ctrl_s_chord_count: 1,
+  key_event_count: 2,
+  tab_create_count: 0,
+  tab_close_count: 0,
+  tradingview_process_start_count: 0,
+  tradingview_process_kill_count: 0,
+  full_external_gate_invocation_count: 1,
+});
+
+export const LIVE_CASE_REGISTRY = Object.freeze({
+  batch: Object.freeze({ file: 'tests/batch_e2e.test.js' }),
+  chart: Object.freeze({ file: 'tests/e2e.test.js' }),
+  graphics: Object.freeze({ file: 'tests/graphics_e2e.test.js' }),
+  launch: Object.freeze({ file: 'tests/launch_e2e.test.js' }),
+  pine_facade: Object.freeze({ file: 'tests/pine_facade_e2e.test.js' }),
+  quote: Object.freeze({ file: 'tests/quote_e2e.test.js' }),
+});
+
+const HEX_SHA256 = /^[0-9a-f]{64}$/;
+const HEX_GIT_SHA1 = /^[0-9a-f]{40}$/;
+const HEX_TARGET_ID = /^[0-9a-fA-F]{32}$/;
+const GATE_B_ENVELOPE_KEYS = Object.freeze([
+  'approval_nonce_sha256',
+  'coordinator_version',
+  'envelope_sha256',
+  'expires_at',
+  'external_action_budgets',
+  'full_command',
+  'live_adapter_dispatch',
+  'live_case_registry_sha256',
+  'repository_head',
+  'schema_version',
+  'target_policy',
+  'test_manifest_sha256',
+  'working_tree_diff_sha256',
+]);
+
+export class GateBError extends Error {
+  constructor(code) {
+    super(code);
+    this.name = 'GateBError';
+    this.code = code;
+  }
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalize(value[key])]));
+  }
+  return value;
+}
+
+export function sha256(value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+export function digestJson(value) {
+  return sha256(JSON.stringify(canonicalize(value)));
+}
+
+export const LIVE_CASE_REGISTRY_SHA256 = digestJson(LIVE_CASE_REGISTRY);
+
+export function resolveLiveCase(caseId, suppliedRegistryDigest) {
+  if (suppliedRegistryDigest !== LIVE_CASE_REGISTRY_SHA256) {
+    throw new GateBError('GATE_B_REGISTRY_DIGEST_MISMATCH');
+  }
+  if (typeof caseId !== 'string' || !Object.hasOwn(LIVE_CASE_REGISTRY, caseId)) {
+    throw new GateBError('GATE_B_UNKNOWN_CASE');
+  }
+  return LIVE_CASE_REGISTRY[caseId];
+}
+
+export function buildGateBApprovalDraft({
+  repositoryHead,
+  workingTreeDiffSha256,
+  testManifestSha256,
+  approvalNonceSha256,
+  targetPolicy,
+  expiresAt,
+} = {}) {
+  const draft = {
+    schema_version: GATE_B_SCHEMA_VERSION,
+    coordinator_version: COORDINATOR_VERSION,
+    repository_head: repositoryHead,
+    working_tree_diff_sha256: workingTreeDiffSha256,
+    test_manifest_sha256: testManifestSha256,
+    approval_nonce_sha256: approvalNonceSha256,
+    live_case_registry_sha256: LIVE_CASE_REGISTRY_SHA256,
+    target_policy: targetPolicy,
+    external_action_budgets: GATE_B_BUDGETS,
+    full_command: GATE_B_COMMAND,
+    expires_at: expiresAt,
+    live_adapter_dispatch: 'DISABLED_PENDING_FRESH_GATE_B_APPROVAL',
+  };
+  return { ...draft, envelope_sha256: digestJson(draft) };
+}
+
+function isExactExplicitTargetPolicy(policy) {
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return false;
+  const keys = Object.keys(policy).sort();
+  return keys.length === 2
+    && keys[0] === 'kind'
+    && keys[1] === 'target_id'
+    && policy.kind === 'explicit_target_id'
+    && HEX_TARGET_ID.test(policy.target_id || '');
+}
+
+export function validateGateBApproval(envelope, expected, nowMs = Date.now()) {
+  if (!envelope || typeof envelope !== 'object') throw new GateBError('GATE_B_ENVELOPE_INVALID');
+  const envelopeKeys = Object.keys(envelope).sort();
+  if (
+    envelopeKeys.length !== GATE_B_ENVELOPE_KEYS.length
+    || envelopeKeys.some((key, index) => key !== GATE_B_ENVELOPE_KEYS[index])
+  ) {
+    throw new GateBError('GATE_B_ENVELOPE_INVALID');
+  }
+  const suppliedDigest = envelope.envelope_sha256;
+  const unsigned = { ...envelope };
+  delete unsigned.envelope_sha256;
+  if (!HEX_SHA256.test(suppliedDigest || '') || digestJson(unsigned) !== suppliedDigest) {
+    throw new GateBError('GATE_B_ENVELOPE_DIGEST_MISMATCH');
+  }
+  if (
+    !HEX_GIT_SHA1.test(envelope.repository_head || '')
+    || !HEX_SHA256.test(envelope.working_tree_diff_sha256 || '')
+    || !HEX_SHA256.test(envelope.test_manifest_sha256 || '')
+    || !HEX_SHA256.test(envelope.approval_nonce_sha256 || '')
+    || !isExactExplicitTargetPolicy(envelope.target_policy)
+  ) {
+    throw new GateBError('GATE_B_ENVELOPE_INVALID');
+  }
+  const expiresMs = Date.parse(envelope.expires_at);
+  if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) throw new GateBError('GATE_B_APPROVAL_EXPIRED');
+  const fixedBindings = {
+    schema_version: GATE_B_SCHEMA_VERSION,
+    coordinator_version: COORDINATOR_VERSION,
+    full_command: GATE_B_COMMAND,
+    external_action_budgets: GATE_B_BUDGETS,
+  };
+  for (const [field, value] of Object.entries(fixedBindings)) {
+    if (digestJson(envelope[field]) !== digestJson(value)) {
+      throw new GateBError('GATE_B_APPROVAL_BINDING_MISMATCH');
+    }
+  }
+  const requiredMeasuredBindings = [
+    'repository_head',
+    'working_tree_diff_sha256',
+    'test_manifest_sha256',
+    'target_policy',
+  ];
+  for (const field of requiredMeasuredBindings) {
+    if (!expected || !Object.hasOwn(expected, field)) {
+      throw new GateBError('GATE_B_EXPECTED_BINDING_MISSING');
+    }
+  }
+  for (const [field, value] of Object.entries(expected || {})) {
+    if (digestJson(envelope[field]) !== digestJson(value)) {
+      throw new GateBError('GATE_B_APPROVAL_BINDING_MISMATCH');
+    }
+  }
+  if (envelope.live_case_registry_sha256 !== LIVE_CASE_REGISTRY_SHA256) {
+    throw new GateBError('GATE_B_REGISTRY_DIGEST_MISMATCH');
+  }
+  if (envelope.live_adapter_dispatch !== 'DISABLED_PENDING_FRESH_GATE_B_APPROVAL') {
+    throw new GateBError('GATE_B_LIVE_DISPATCH_DISABLED');
+  }
+  return true;
+}
+
+async function fsyncDirectory(path) {
+  const handle = await open(path, 'r');
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+async function removeOwnedLock(stateDir, ownershipToken) {
+  const lockDir = join(stateDir, 'active.lock');
+  let stored;
+  try { stored = await readFile(join(lockDir, 'owner'), 'utf8'); } catch {
+    throw new GateBError('GATE_B_LOCK_OWNERSHIP_UNKNOWN');
+  }
+  const actual = Buffer.from(stored);
+  const expected = Buffer.from(ownershipToken);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw new GateBError('GATE_B_LOCK_OWNERSHIP_MISMATCH');
+  }
+  await rm(lockDir, { recursive: true });
+  await fsyncDirectory(stateDir);
+}
+
+export async function acquireGateBLease({
+  stateDir,
+  nonce,
+  envelope,
+  expected,
+  nowMs = Date.now(),
+  ownershipToken,
+} = {}) {
+  if (typeof nonce !== 'string' || nonce.length < 32) throw new GateBError('GATE_B_NONCE_INVALID');
+  validateGateBApproval(envelope, {
+    ...(expected || {}),
+    approval_nonce_sha256: sha256(nonce),
+  }, nowMs);
+  const owner = ownershipToken || randomBytes(32).toString('hex');
+  await mkdir(stateDir, { recursive: true });
+  const lockDir = join(stateDir, 'active.lock');
+  try { await mkdir(lockDir); } catch (error) {
+    if (error?.code === 'EEXIST') throw new GateBError('GATE_B_ACTIVE_LOCKED');
+    throw error;
+  }
+  try {
+    const ownerFile = await open(join(lockDir, 'owner'), 'wx', 0o600);
+    try { await ownerFile.writeFile(owner); await ownerFile.sync(); } finally { await ownerFile.close(); }
+    await fsyncDirectory(lockDir);
+    const spentDir = join(stateDir, 'spent');
+    await mkdir(spentDir, { recursive: true });
+    const nonceDigest = sha256(nonce);
+    const spentPath = join(spentDir, `${nonceDigest}.json`);
+    let spentFile;
+    try { spentFile = await open(spentPath, 'wx', 0o600); } catch (error) {
+      if (error?.code === 'EEXIST') throw new GateBError('GATE_B_NONCE_SPENT');
+      throw error;
+    }
+    const record = {
+      schema_version: GATE_B_SCHEMA_VERSION,
+      envelope_sha256: envelope.envelope_sha256,
+      external_action_budgets: envelope.external_action_budgets,
+    };
+    try { await spentFile.writeFile(`${JSON.stringify(record)}\n`); await spentFile.sync(); }
+    finally { await spentFile.close(); }
+    await fsyncDirectory(spentDir);
+    await fsyncDirectory(stateDir);
+    return Object.freeze({ stateDir, ownershipToken: owner, nonceDigest, spentPath });
+  } catch (error) {
+    try { await removeOwnedLock(stateDir, owner); } catch {
+      throw new GateBError('GATE_B_LOCK_CLEANUP_FAILED');
+    }
+    throw error;
+  }
+}
+
+export async function prepareGateBLease({
+  stateDir,
+  nonce,
+  envelope,
+  expected,
+  nowMs = Date.now(),
+  ownershipToken,
+} = {}) {
+  validateGateBApproval(envelope, {
+    ...(expected || {}),
+    approval_nonce_sha256: sha256(nonce || ''),
+  }, nowMs);
+  return acquireGateBLease({ stateDir, nonce, envelope, expected, nowMs, ownershipToken });
+}
+
+export async function releaseGateBLease(lease) {
+  await removeOwnedLock(lease.stateDir, lease.ownershipToken);
+}
 
 const OFFLINE_SPECS = Object.freeze([
   Object.freeze({
