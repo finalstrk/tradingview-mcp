@@ -44,21 +44,41 @@ export async function pollLoop(fetcher, {
   try {
     while (!controller.signal.aborted) {
       try {
-        const fetchPromise = Promise.resolve().then(() => fetcher({
-          signal: controller.signal,
-          timeoutMs: fetchTimeoutMs,
-        }));
-        const data = await raceWithAbort(fetchPromise, controller.signal, label, fetchTimeoutMs);
-        if (!data) {
-          await sleep(interval, controller.signal);
-          continue;
-        }
+        const fetchController = new AbortController();
+        const onStreamAbort = () => {
+          if (!fetchController.signal.aborted) {
+            fetchController.abort(controller.signal.reason || new Error(`stream:${label} stopped`));
+          }
+        };
+        controller.signal.addEventListener('abort', onStreamAbort, { once: true });
 
-        const hash = dedupe ? JSON.stringify(data) : null;
-        if (!dedupe || hash !== lastHash) {
-          lastHash = hash;
-          const line = JSON.stringify({ ...data, _ts: Date.now(), _stream: label });
-          processRef.stdout.write(line + '\n');
+        try {
+          const fetchPromise = Promise.resolve().then(() => fetcher({
+            signal: fetchController.signal,
+            timeoutMs: fetchTimeoutMs,
+          }));
+          const data = await raceWithAbort(
+            fetchPromise,
+            controller.signal,
+            label,
+            fetchTimeoutMs,
+            timeoutError => {
+              if (!fetchController.signal.aborted) fetchController.abort(timeoutError);
+            },
+          );
+          if (!data) {
+            await sleep(interval, controller.signal);
+            continue;
+          }
+
+          const hash = dedupe ? JSON.stringify(data) : null;
+          if (!dedupe || hash !== lastHash) {
+            lastHash = hash;
+            const line = JSON.stringify({ ...data, _ts: Date.now(), _stream: label });
+            processRef.stdout.write(line + '\n');
+          }
+        } finally {
+          controller.signal.removeEventListener('abort', onStreamAbort);
         }
       } catch (err) {
         if (controller.signal.aborted) break;
@@ -79,7 +99,7 @@ export async function pollLoop(fetcher, {
   }
 }
 
-function raceWithAbort(promise, signal, label, timeoutMs) {
+function raceWithAbort(promise, signal, label, timeoutMs, onTimeout) {
   if (signal.aborted) return Promise.reject(signal.reason || new Error(`stream:${label} stopped`));
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -94,10 +114,11 @@ function raceWithAbort(promise, signal, label, timeoutMs) {
     const onAbort = () => finish(reject, signal.reason || new Error(`stream:${label} stopped`));
     signal.addEventListener('abort', onAbort, { once: true });
     const boundedTimeout = Math.max(1, Number(timeoutMs) || 1);
-    timer = setTimeout(
-      () => finish(reject, new Error(`stream:${label} fetch timed out after ${boundedTimeout}ms`)),
-      boundedTimeout,
-    );
+    timer = setTimeout(() => {
+      const timeoutError = new Error(`stream:${label} fetch timed out after ${boundedTimeout}ms`);
+      try { onTimeout?.(timeoutError); } catch {}
+      finish(reject, timeoutError);
+    }, boundedTimeout);
     Promise.resolve(promise).then(
       value => finish(resolve, value),
       error => finish(reject, error),

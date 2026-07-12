@@ -115,6 +115,59 @@ describe('stream termination', () => {
     assert.equal(processDouble.listenerCount('SIGINT'), 0);
     assert.equal(processDouble.listenerCount('SIGTERM'), 0);
   });
+
+  it('aborts the in-flight fetcher when its bounded timeout fires', async () => {
+    const processDouble = createProcessDouble();
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    let abortListeners = 0;
+    signal.addEventListener = (type, listener, options) => {
+      if (type === 'abort') abortListeners += 1;
+      return add(type, listener, options);
+    };
+    signal.removeEventListener = (type, listener, options) => {
+      if (type === 'abort') abortListeners -= 1;
+      return remove(type, listener, options);
+    };
+    let childSignal;
+    let childAbortCalls = 0;
+    let fetchCalls = 0;
+    const pending = pollLoop(
+      ({ signal: fetchSignal }) => {
+        fetchCalls += 1;
+        childSignal = fetchSignal;
+        fetchSignal.addEventListener('abort', () => { childAbortCalls += 1; }, { once: true });
+        return new Promise(() => {});
+      },
+      {
+        interval: 1,
+        fetchTimeoutMs: 20,
+        label: 'child-timeout',
+        signal,
+        processRef: processDouble,
+      },
+    );
+
+    try {
+      await settleWithin(
+        (async () => {
+          while (childAbortCalls < 1) await new Promise(resolve => setImmediate(resolve));
+        })(),
+        250,
+        'fetch timeout did not abort the child signal',
+      );
+      assert.ok(fetchCalls >= 1);
+      assert.notEqual(childSignal, signal, 'fetcher must receive a per-attempt child signal');
+      assert.equal(childSignal.aborted, true);
+      assert.equal(childAbortCalls, 1);
+    } finally {
+      controller.abort(new Error('stop after child timeout'));
+      await settleWithin(pending, 100, 'stream termination after child timeout timed out');
+      assert.equal(abortListeners, 0);
+    }
+  });
 });
 
 describe('Pine cancellation propagation', () => {
