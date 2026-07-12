@@ -16,6 +16,7 @@ import {
   buildGateBApprovalDraft,
   buildSafeStop,
   digestJson,
+  executeCoordinator,
   parseInvocation,
   prepareGateBLease,
   releaseGateBLease,
@@ -90,6 +91,72 @@ test('invocation parser never grants live mode without an approval nonce', () =>
     approval_present: false,
     reason: 'approval_required',
   });
+  assert.deepEqual(parseInvocation(['--phase0-read-only']), {
+    mode: 'phase0_read_only',
+    approval_present: false,
+    reason: 'explicit_read_only_requested',
+  });
+});
+
+test('phase0 branch accepts only an injected explicit read plan and reports zero mutation ledger', async () => {
+  const context = { targetId: 'SECRET_TARGET', sessionId: 'SECRET_SESSION', executionContextId: 7 };
+  const transport = {
+    async getContext() { return { ...context }; },
+    async call() {
+      return { result: { value: {
+        readable: true,
+        state: 'known',
+        baseline_comparable: true,
+        code: 'PHASE0_STATE_READ',
+        counts: { studies: 2 },
+      } } };
+    },
+    async releaseObject() {},
+  };
+  const result = await executeCoordinator({
+    args: ['--phase0-read-only'],
+    phase0Configuration: {
+      deadlineMs: 50,
+      targets: [{ transport, expectedContext: context }],
+    },
+  });
+  assert.equal(result.exit_code, 0);
+  assert.equal(result.payload.status, 'complete');
+  assert.equal(result.payload.code, 'PHASE0_READ_ONLY_COMPLETE');
+  assert.deepEqual(result.payload.ledger, {
+    cdp_read: 1,
+    cdp_mutation: 0,
+    network: 0,
+    input: 0,
+    ui: 0,
+    child_live_test: 0,
+  });
+  assert.equal(result.payload.approval_present, false);
+  assert.equal(result.payload.lease_created, false);
+  assert.equal(result.payload.live_test_started, false);
+  assert.doesNotMatch(JSON.stringify(result.payload), /SECRET/);
+});
+
+test('phase0 branch fails closed without injected configuration and sanitizes runner failure', async () => {
+  const missing = await executeCoordinator({ args: ['--phase0-read-only'] });
+  assert.equal(missing.exit_code, 1);
+  assert.equal(missing.payload.code, 'PHASE0_CONFIGURATION_REQUIRED');
+  assert.deepEqual(missing.payload.ledger, {
+    cdp_read: 0,
+    cdp_mutation: 0,
+    network: 0,
+    input: 0,
+    ui: 0,
+    child_live_test: 0,
+  });
+
+  const failed = await executeCoordinator({
+    args: ['--phase0-read-only'],
+    phase0Configuration: { deadlineMs: 50, targets: [{ secret: 'SECRET_RAW_FAILURE' }] },
+  });
+  assert.equal(failed.exit_code, 1);
+  assert.equal(failed.payload.code, 'PHASE0_READ_ONLY_FAILED');
+  assert.doesNotMatch(JSON.stringify(failed.payload), /SECRET|INVALID_CONFIGURATION/);
 });
 
 test('safe-stop payload has a fixed, zero-action ledger', () => {

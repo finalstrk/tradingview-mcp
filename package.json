@@ -18,7 +18,7 @@
     "strategy-spec-check": "node scripts/strategy_spec_check.js",
     "test": "node tests/test-coordinator.mjs",
     "test:e2e": "node tests/test-coordinator.mjs --offline-only",
-    "test:unit": "node --import ./tests/offline_network_guard.js --experimental-vm-modules --test tests/batch.test.js tests/cli.test.js tests/connection.test.js tests/coordinator.test.js tests/daily_review.test.js tests/data_contract.test.js tests/data_precision.test.js tests/e2e_safe_adapters.test.js tests/gate_b_loopback_ipc.test.js tests/health_launch.test.js tests/phase0_read_only.test.js tests/pine_analyze.test.js tests/pine_read_only_boundary.test.js tests/raw_command.test.js tests/replay.test.js tests/sanitization.test.js tests/strategy_spec_check.test.js tests/stream.test.js tests/test_manifest.test.js tests/wait.test.js",
+    "test:unit": "node --import ./tests/offline_network_guard.js --experimental-vm-modules --test tests/batch.test.js tests/cli.test.js tests/connection.test.js tests/coordinator.test.js tests/daily_review.test.js tests/data_contract.test.js tests/data_precision.test.js tests/e2e_safe_adapters.test.js tests/gate_b_guarded_harness.test.js tests/gate_b_loopback_ipc.test.js tests/health_launch.test.js tests/phase0_read_only.test.js tests/pine_analyze.test.js tests/pine_read_only_boundary.test.js tests/raw_command.test.js tests/replay.test.js tests/sanitization.test.js tests/strategy_spec_check.test.js tests/stream.test.js tests/test_manifest.test.js tests/wait.test.js",
     "test:cli": "node --test tests/cli.test.js",
     "test:all": "node tests/test-coordinator.mjs --offline-only",
     "test:verbose": "node tests/test-coordinator.mjs --offline-only",

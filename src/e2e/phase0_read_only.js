@@ -25,9 +25,9 @@ const FORBIDDEN_CAPABILITIES = new Set([
   'process',
 ]);
 
-// This is the only expression the Phase 0b runner can issue. The page-side
-// collector is responsible for producing the reviewed aggregate; the runner
-// independently validates it before anything crosses its public boundary.
+// This is the only expression the Phase 0b runner can issue. It projects
+// bounded counts from the already-open chart without mutating page state, and
+// the runner independently validates the result before exposing it.
 const FIXED_SNAPSHOT_EXPRESSION = `(() => {
   const unavailable = () => ({
     readable: false,
@@ -37,33 +37,33 @@ const FIXED_SNAPSHOT_EXPRESSION = `(() => {
     counts: {},
   });
   try {
-    const source = globalThis.__tvMcpPhase0ReadOnlySnapshot__;
-    if (!source || typeof source !== 'object') return unavailable();
-    const descriptors = Object.getOwnPropertyDescriptors(source);
-    const value = key => descriptors[key] && 'value' in descriptors[key]
-      ? descriptors[key].value
-      : undefined;
-    const readable = value('readable');
-    const state = value('state');
-    const baselineComparable = value('baseline_comparable');
-    const code = value('code');
-    const sourceCounts = value('counts');
-    if (
-      typeof readable !== 'boolean'
-      || (state !== 'known' && state !== 'unknown')
-      || typeof baselineComparable !== 'boolean'
-      || (code !== 'PHASE0_STATE_READ' && code !== 'PHASE0_STATE_UNAVAILABLE')
-      || !sourceCounts
-      || typeof sourceCounts !== 'object'
-    ) return unavailable();
-    const countDescriptors = Object.getOwnPropertyDescriptors(sourceCounts);
+    const chart = globalThis.TradingViewApi?._activeChartWidgetWV?.value?.();
+    const model = chart?._chartWidget?.model?.();
+    if (!model) return unavailable();
     const counts = {};
-    for (const key of ['drawings', 'editors', 'panels', 'replays', 'studies']) {
-      const descriptor = countDescriptors[key];
-      if (descriptor && 'value' in descriptor && Number.isSafeInteger(descriptor.value)
-        && descriptor.value >= 0 && descriptor.value <= 1000000) counts[key] = descriptor.value;
-    }
-    return { readable, state, baseline_comparable: baselineComparable, code, counts };
+    const collect = (key, operation) => {
+      try {
+        const value = operation();
+        const count = Array.isArray(value)
+          ? value.length
+          : Number.isSafeInteger(value?.length)
+            ? value.length
+            : Number.isSafeInteger(value?.size)
+              ? value.size
+              : undefined;
+        if (Number.isSafeInteger(count) && count >= 0 && count <= 1000000) counts[key] = count;
+      } catch {}
+    };
+    collect('studies', () => model.studies?.());
+    collect('drawings', () => model.allShapes?.());
+    collect('panels', () => model.panes?.());
+    return {
+      readable: true,
+      state: 'known',
+      baseline_comparable: true,
+      code: 'PHASE0_STATE_READ',
+      counts,
+    };
   } catch {
     return unavailable();
   }

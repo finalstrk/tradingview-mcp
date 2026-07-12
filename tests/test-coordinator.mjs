@@ -4,6 +4,7 @@ import { constants as FS_CONSTANTS } from 'node:fs';
 import { mkdir, open, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createPhase0ReadOnlyPlan, runPhase0ReadOnly } from '../src/e2e/phase0_read_only.js';
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(TEST_DIR);
@@ -447,6 +448,13 @@ const OFFLINE_SPECS = Object.freeze([
  */
 export function parseInvocation(args = []) {
   const values = Array.isArray(args) ? args : [];
+  if (values.length === 1 && values[0] === '--phase0-read-only') {
+    return {
+      mode: 'phase0_read_only',
+      approval_present: false,
+      reason: 'explicit_read_only_requested',
+    };
+  }
   if (values.length === 1 && values[0] === '--offline-only') {
     return {
       mode: 'offline',
@@ -535,8 +543,80 @@ export function buildSafeStop({ invocation, checks }) {
   };
 }
 
-export function executeCoordinator({ args = process.argv.slice(2), runner = executeSpec } = {}) {
+function phase0Ledger(cdpRead = 0) {
+  return {
+    cdp_read: cdpRead,
+    cdp_mutation: 0,
+    network: 0,
+    input: 0,
+    ui: 0,
+    child_live_test: 0,
+  };
+}
+
+async function executePhase0Branch(invocation, phase0Configuration) {
+  if (!phase0Configuration) {
+    return {
+      payload: {
+        schema_version: 1,
+        status: 'safe_stop',
+        code: 'PHASE0_CONFIGURATION_REQUIRED',
+        mode: invocation.mode,
+        approval_present: false,
+        lease_created: false,
+        external_action_count: 0,
+        live_test_started: false,
+        ledger: phase0Ledger(),
+      },
+      exit_code: 1,
+    };
+  }
+  try {
+    const plan = createPhase0ReadOnlyPlan(phase0Configuration);
+    const result = await runPhase0ReadOnly(plan);
+    return {
+      payload: {
+        schema_version: 1,
+        status: 'complete',
+        code: result.code,
+        mode: invocation.mode,
+        approval_present: false,
+        lease_created: false,
+        external_action_count: result.counts.cdp_reads,
+        live_test_started: false,
+        counts: result.counts,
+        snapshots: result.snapshots,
+        ledger: phase0Ledger(result.counts.cdp_reads),
+      },
+      exit_code: 0,
+    };
+  } catch {
+    return {
+      payload: {
+        schema_version: 1,
+        status: 'failed',
+        code: 'PHASE0_READ_ONLY_FAILED',
+        mode: invocation.mode,
+        approval_present: false,
+        lease_created: false,
+        external_action_count: 0,
+        live_test_started: false,
+        ledger: phase0Ledger(),
+      },
+      exit_code: 1,
+    };
+  }
+}
+
+export async function executeCoordinator({
+  args = process.argv.slice(2),
+  runner = executeSpec,
+  phase0Configuration,
+} = {}) {
   const invocation = parseInvocation(args);
+  if (invocation.mode === 'phase0_read_only') {
+    return executePhase0Branch(invocation, phase0Configuration);
+  }
   const checks = runOfflineChecks({ runner });
   return {
     payload: buildSafeStop({ invocation, checks }),
@@ -546,7 +626,7 @@ export function executeCoordinator({ args = process.argv.slice(2), runner = exec
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
-  const result = executeCoordinator();
+  const result = await executeCoordinator();
   process.stdout.write(`${JSON.stringify(result.payload)}\n`);
   process.exitCode = result.exit_code;
 }

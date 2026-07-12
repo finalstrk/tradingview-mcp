@@ -42,3 +42,24 @@ open IPC, connect to CDP, send input, or perform network access by itself. If a
 reviewed adapter is not injected, activation fails closed before consuming the
 nonce. Actual live execution still requires a separately generated, current,
 fresh Gate B approval file and explicit external-action authorization.
+
+## Phase 0b read-only mode
+
+`--phase0-read-only` is a separate nonce-free coordinator branch. It does not
+create an active lock or spent lease and cannot transition into the Gate B live
+plan. The CLI alone supplies no target, transport, or capability, so a direct
+CLI invocation fails closed with `PHASE0_CONFIGURATION_REQUIRED`.
+
+A trusted in-process caller may inject an explicit target fixture consisting
+only of an exact target/session/execution-context tuple and a read transport.
+The coordinator passes that fixture to `createPhase0ReadOnlyPlan` and
+`runPhase0ReadOnly`. The opaque plan permits one fixed `Runtime.evaluate` read
+per explicit target through the CDP read adapter. Mutation, network, keyboard,
+input, UI, child-live-test, tab, and process capabilities are neither issued
+nor accepted.
+
+Successful output contains only the reviewed aggregate schema and numeric
+ledger. Target and session identities, transports, expressions, raw errors,
+and arbitrary page values are excluded. Configuration or runner failures are
+collapsed to fixed codes with a zero-action ledger. Normal `npm test` behavior
+is unchanged and continues to stop offline with `OFFLINE_APPROVAL_REQUIRED`.

@@ -99,6 +99,8 @@ describe('Phase 0b read-only planner and runner', () => {
       assert.equal(current.calls[0].method, 'Runtime.evaluate');
       assert.equal(current.calls[0].params.returnByValue, true);
       assert.equal(current.calls[0].params.awaitPromise, false);
+      assert.match(current.calls[0].params.expression, /TradingViewApi/);
+      assert.equal(current.calls[0].params.expression.includes('__tvMcpPhase0ReadOnlySnapshot__'), false);
     }
     const serialized = JSON.stringify(result);
     assert.equal(serialized.includes('SECRET_TARGET'), false);
