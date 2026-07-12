@@ -20,7 +20,7 @@ Last updated: 2026-07-12
   accepted P1 paths.
 - Gate A0 Pine discovery is implemented and independently Approved. The
   offline spec is 157/157 on three consecutive runs; the original unit gate
-  was 269/269 and the latest repository unit gate is 294/294. The frozen
+  was 269/269 and the latest repository unit gate is 302/302. The frozen
   artifact digest is
   `0400ce7e163bc475f2a68609551754fe4530f67062ba87ca6e0e3cb25d5d9125`.
 - Gate A1 was attempted once. The exact command, target tuple, budgets, and
@@ -63,9 +63,18 @@ Last updated: 2026-07-12
 - Final minor hardening commits `9bcd9e9`, `3e487ab`, and `6aff2aa` cover
   report disconnect failures, validate direct TradingView probe identity and
   port inputs, and bound never-settling custom stream fetchers.
-- Gate B/full live E2E and the final broad review remain pending. No `npm test`,
-  additional live CRI/CDP operation, TradingView/UI mutation, network POST,
-  save, reload, tab/process operation, or Gate A1 retry was run in this stream.
+- `3eafd93` adds fail-closed strategy research gates for per-variant negative
+  evidence, executed diagnostics, point-in-time data, leverage/funding, and
+  concentration semantics. `5ccb414` gives each stream fetch attempt its own
+  abort controller so timeout cancellation reaches the underlying fetcher;
+  both changes are covered by focused and adversarial tests and preserve the
+  paper/read-only boundary.
+- The final offline review approved the pushed hardening set: adversarial
+  probes 42/42, focused strategy/stream 24/24, and repository unit 302/302.
+  `npm test` remains an approval-gated safe stop with zero external actions.
+- Gate B/full live E2E remain pending; the offline final review is approved. No
+  live CRI/CDP operation, TradingView/UI mutation, network POST, save, reload,
+  tab/process operation, or Gate A1 retry was run in this stream.
 
 - Historical TradingView trade-decision support artifacts and workflow notes remain in this repository; the older setup-verification context below is retained.
 - The repository is clean after the hardening commits; no untracked trade-system paths are part of this audit stream.
@@ -154,6 +163,12 @@ Last updated: 2026-07-12
 - 2026-07-12: Validated preserved strategy/daily-review changes with focused 9/9 tests and `npm run test:unit` 279/279, 37 suites, fail/cancelled/skipped 0.
 - 2026-07-12: Validated strategy hardening (11/11), coordinator/manifest (17/17), and `npm test` safe-stop (`external_action_count=0`, live=false).
 - 2026-07-12: Validated final minor hardening with focused 26/26 tests and `npm run test:unit` 294/294, 37 suites, fail/cancelled/skipped 0.
+- 2026-07-12: Committed and pushed `3eafd93` (strategy research gates) and
+  `5ccb414` (per-fetch stream abort propagation) as separate intent groups;
+  focused strategy/stream 24/24 and `npm run test:unit` 302/302 passed.
+- 2026-07-12: Ran `npm test` through the coordinator; it emitted
+  `OFFLINE_APPROVAL_REQUIRED` with `external_action_count=0` and
+  `live_test_started=false`.
 - 2026-07-08: Launched TradingView Desktop with `HOME=/home/yukio` and CDP port 9222, then repaired current Linux/TradingView-build E2E drift: Linux binary path detection, visible-range assertion, bottom widget close fallback, and replay-stop cleanup.
 - 2026-07-08: Ran targeted E2E for `tv_launch|chart_set_visible_range|ui_open_panel|replay_stop`; 4/4 passed.
 - 2026-07-08: Ran full `npm run test`; 95/95 tests passed.
