@@ -15,7 +15,7 @@ Last updated: 2026-07-12
 
 - Branch `codex/tradingview-audit-hardening` contains six hardening intent
   commits from the 2026-07-08 baseline and is synchronized with `fork` at
-  `1571044e96da3117d13a60beb0f155fda0216747`.
+  `30a16225931525e74a85db8a741e1f511e8c6841`.
 - P1-01 through P1-06 operational hardening is committed in separate intent
   groups. The remaining baseline raw CDP calls are P2 notes outside the
   accepted P1 paths.
@@ -23,12 +23,19 @@ Last updated: 2026-07-12
   offline spec is 157/157 on three consecutive runs; the unit gate is
   269/269. The frozen artifact digest is
   `0400ce7e163bc475f2a68609551754fe4530f67062ba87ca6e0e3cb25d5d9125`.
-- Gate A1 has not run. The exact command, target tuple, budgets, and residual
-  caveat are frozen in the A0 approval envelope, but user approval is still
-  required before any live read-only discovery.
+- Gate A1 was attempted once. The exact command, target tuple, budgets, and
+  residual caveat are frozen in the A0 approval envelope. The one approved attempt
+  exited 1 at `PINE_DISCOVERY_OPEN` with ledger `1/0/1`, retry/fallback `0`,
+  probe absent, and residual `UNKNOWN`; it was not retried.
+- Independent read-only evidence found the exact target/tuple/frame/context
+  unchanged, editor closed, and no process/tab/context mutation. The reviewed
+  open method is callable, but the reviewed close method
+  `hideWidget('pine-editor')` is currently non-callable. The open failure is
+  therefore classified as `THROW_OR_POST_OPEN_VISIBILITY_UNPROVEN` until a
+  separately approved diagnostic can distinguish the two without reopening.
 - Gate B/full live E2E and the final broad review remain pending. No `npm test`,
-  live CRI/CDP operation, TradingView/UI mutation, network POST, save, reload,
-  tab/process operation, or exact Gate A1 command was run in this stream.
+  additional live CRI/CDP operation, TradingView/UI mutation, network POST,
+  save, reload, tab/process operation, or Gate A1 retry was run in this stream.
 
 - Historical TradingView trade-decision support artifacts and workflow notes remain in this repository; the older setup-verification context below is retained.
 - The repository is clean after the hardening commits; no untracked trade-system paths are part of this audit stream.
@@ -58,6 +65,8 @@ Last updated: 2026-07-12
 
 - Stop after completed `nr_squeeze` / `fx` verification and show `git status` plus `git diff --stat` before continuing.
 - If approved, proceed to `futures` market verification using the same setup-verify evidence loop.
+- Do not retry Gate A1 or add a close fallback. Obtain a new design/approval
+  decision for the current TradingView close API mismatch first.
 - Do not run `/trade-judge` E2E yet; no setup x market is `adopted`.
 - For the read-only reviewer, manually run `npm run daily-review -- --no-watchlist --bars 50` after TradingView Desktop is available on CDP. Keep it manual until the output proves useful and low-noise.
 - For any new strategy hypothesis, first generate/fill the JSON template with `npm run strategy-spec-check -- --template`, then run `npm run strategy-spec-check -- <spec.json>` and route missing-critical ideas to `no-action`.
