@@ -1,6 +1,6 @@
 # WORKSTATE
 
-Last updated: 2026-07-08
+Last updated: 2026-07-12
 
 ## Side project: quant-github-atlas (2026-07-07) — COMPLETED
 
@@ -11,8 +11,27 @@ Last updated: 2026-07-08
 
 ## Current state
 
-- TradingView trade-decision support system implementation artifacts exist in this repository but are not committed yet.
-- `CLAUDE.md` is modified; `docs/`, `journal/`, `pine/`, `scripts/journal_stats.js`, and project-local `skills/{trade-judge,trade-log,setup-verify,replay-drill}/` are untracked.
+### Audit / hardening stream (2026-07-12)
+
+- Branch `codex/tradingview-audit-hardening` contains six hardening intent
+  commits from the 2026-07-08 baseline and is synchronized with `fork` at
+  `1571044e96da3117d13a60beb0f155fda0216747`.
+- P1-01 through P1-06 operational hardening is committed in separate intent
+  groups. The remaining baseline raw CDP calls are P2 notes outside the
+  accepted P1 paths.
+- Gate A0 Pine discovery is implemented and independently Approved. The
+  offline spec is 157/157 on three consecutive runs; the unit gate is
+  269/269. The frozen artifact digest is
+  `0400ce7e163bc475f2a68609551754fe4530f67062ba87ca6e0e3cb25d5d9125`.
+- Gate A1 has not run. The exact command, target tuple, budgets, and residual
+  caveat are frozen in the A0 approval envelope, but user approval is still
+  required before any live read-only discovery.
+- Gate B/full live E2E and the final broad review remain pending. No `npm test`,
+  live CRI/CDP operation, TradingView/UI mutation, network POST, save, reload,
+  tab/process operation, or exact Gate A1 command was run in this stream.
+
+- Historical TradingView trade-decision support artifacts and workflow notes remain in this repository; the older setup-verification context below is retained.
+- The repository is clean after the hardening commits; no untracked trade-system paths are part of this audit stream.
 - `journal/registry.json` contains 5 setups. All `fx` setup x market entries (`orb`, `vwap_reversion`, `pdh_pdl_break`, `ema_pullback`, `nr_squeeze`) have been verified and marked `rejected`; non-fx market entries are still `candidate`.
 - No setup x market is currently `adopted`; `/trade-judge` should still return structurally gated `NO-GO` for live judgement.
 - Read-only daily review artifacts now exist: `docs/read-only-daily-review.md`, `scripts/daily_review.js`, and `tests/daily_review.test.js`. This is a reporting/review layer only; it does not place orders, mutate chart state, or operate broker/payment UIs.
