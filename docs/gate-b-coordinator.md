@@ -90,9 +90,9 @@ The envelope separately binds the IPC dispatch-registry digest and the exact
 global budget object, so changing either case reachability or any ceiling
 invalidates approval.
 
-This production contract uses Gate B approval schema version 4 and coordinator
+This production contract uses Gate B approval schema version 5 and coordinator
 version `gate-b-production-v5`. Earlier drafts and their registry digests are
-invalid even if their repository bindings otherwise appear current. The v4
+invalid even if their repository bindings otherwise appear current. The v5
 envelope additionally binds the exact ordered 24-case set, six-child manifest,
 full target context, build, workload, chart- and owner-operation registries,
 the fixed `owner_local_pre_post` session policy, and benchmark-configuration
