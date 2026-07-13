@@ -37,8 +37,11 @@ Last updated: 2026-07-13
   `PINE_DISCOVERY_CLOSE_CAPABILITY`, zero open/probe/close actions, and a
   closed residual because the approved `hideWidget` capability was absent.
   The spent nonce was not reused. Offline remediation now binds the sole Gate
-  A1 close mutation to the current callable `bottomWidgetBar.close()` no-arg
-  path; every prior digest, approval, and nonce remains invalid.
+  A1 close mutation to the no-argument `bottomWidgetBar.close()` path that was
+  live-verified upstream on TradingView Desktop 3.2.0 / Electron 38. Its
+  callability on the current exact target remains unverified until the fresh
+  read-only preflight runs; every prior digest, approval, and nonce remains
+  invalid.
 - Gate A1 evidence was independently integrated into
   `docs/superpowers/plans/2026-07-12-gate-a1-evidence-integration.md`.
   P1-07 close-capability fail-closed preflight, P1-08 fixed open-stage result
