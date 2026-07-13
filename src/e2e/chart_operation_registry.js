@@ -619,7 +619,7 @@ const DEFINITIONS = [
     "kind": "mutation",
     "method": "Runtime.callFunctionOn",
     "params": {
-      "functionDeclaration": "function(){try { window.TradingView.bottomWidgetBar.hideWidget('backtesting'); } catch(e) {};return null;}",
+      "functionDeclaration": "function(){return window.TradingView.bottomWidgetBar.close();}",
       "argument_names": [],
       "awaitPromise": false,
       "returnByValue": true
@@ -658,7 +658,7 @@ const DEFINITIONS = [
     "kind": "mutation",
     "method": "Runtime.callFunctionOn",
     "params": {
-      "functionDeclaration": "function(){try { window.TradingView.bottomWidgetBar.hideWidget('backtesting'); } catch(e) {};return null;}",
+      "functionDeclaration": "function(){return window.TradingView.bottomWidgetBar.close();}",
       "argument_names": [],
       "awaitPromise": false,
       "returnByValue": true
@@ -697,7 +697,7 @@ const DEFINITIONS = [
     "kind": "mutation",
     "method": "Runtime.callFunctionOn",
     "params": {
-      "functionDeclaration": "function(){try { window.TradingView.bottomWidgetBar.hideWidget('backtesting'); } catch(e) {};return null;}",
+      "functionDeclaration": "function(){return window.TradingView.bottomWidgetBar.close();}",
       "argument_names": [],
       "awaitPromise": false,
       "returnByValue": true
@@ -723,7 +723,7 @@ const DEFINITIONS = [
     "kind": "mutation",
     "method": "Runtime.callFunctionOn",
     "params": {
-      "functionDeclaration": "function(){try { window.TradingView.bottomWidgetBar.hideWidget('pine-editor'); } catch(e) {};return null;}",
+      "functionDeclaration": "function(){return window.TradingView.bottomWidgetBar.close();}",
       "argument_names": [],
       "awaitPromise": false,
       "returnByValue": true
@@ -1125,7 +1125,7 @@ const DEFINITIONS = [
     "kind": "mutation",
     "method": "Runtime.callFunctionOn",
     "params": {
-      "functionDeclaration": "function(){return ((function() {\n          var bwb = window.TradingView.bottomWidgetBar;\n          if (typeof bwb.hideWidget === 'function') return bwb.hideWidget('pine-editor');\n          if (typeof bwb.hide === 'function') return bwb.hide();\n          if (typeof bwb.close === 'function') return bwb.close();\n          return null;\n        })());}",
+      "functionDeclaration": "function(){return window.TradingView.bottomWidgetBar.close();}",
       "argument_names": [],
       "awaitPromise": false,
       "returnByValue": true
@@ -1889,7 +1889,7 @@ const DEFINITIONS = [
     "kind": "mutation",
     "method": "Runtime.callFunctionOn",
     "params": {
-      "functionDeclaration": "function(){try { window.TradingView.bottomWidgetBar.hideWidget('pine-editor'); } catch(e) {};return null;}",
+      "functionDeclaration": "function(){return window.TradingView.bottomWidgetBar.close();}",
       "argument_names": [],
       "awaitPromise": false,
       "returnByValue": true

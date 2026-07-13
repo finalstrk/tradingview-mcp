@@ -21,9 +21,9 @@ Last updated: 2026-07-13
 - Gate A0 Pine discovery is implemented and independently Approved. After the
   P1-07/P1-08 approval-boundary hardening, the offline A0 suite passes 191/191
   on repeated runs. The current digest-bound Gate A1 artifact is
-  `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`.
+  `ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa`.
   Every earlier digest, approval, and nonce is invalid.
-- Gate A1 was attempted once. The exact command, target tuple, budgets, and
+- An earlier Gate A1 attempt used its exact command, target tuple, budgets, and
   residual caveat are frozen in the A0 approval envelope. The one approved attempt
   exited 1 at `PINE_DISCOVERY_OPEN` with ledger `1/0/1`, retry/fallback `0`,
   probe absent, and residual `UNKNOWN`; it was not retried.
@@ -33,6 +33,12 @@ Last updated: 2026-07-13
   `hideWidget('pine-editor')` is currently non-callable. The open failure is
   therefore classified as `THROW_OR_POST_OPEN_VISIBILITY_UNPROVEN` until a
   separately approved diagnostic can distinguish the two without reopening.
+- A later exact Gate A1 attempt safely stopped in `PREFLIGHT` with
+  `PINE_DISCOVERY_CLOSE_CAPABILITY`, zero open/probe/close actions, and a
+  closed residual because the approved `hideWidget` capability was absent.
+  The spent nonce was not reused. Offline remediation now binds the sole Gate
+  A1 close mutation to the current callable `bottomWidgetBar.close()` no-arg
+  path; every prior digest, approval, and nonce remains invalid.
 - Gate A1 evidence was independently integrated into
   `docs/superpowers/plans/2026-07-12-gate-a1-evidence-integration.md`.
   P1-07 close-capability fail-closed preflight, P1-08 fixed open-stage result
@@ -122,7 +128,7 @@ Last updated: 2026-07-13
 - Stop after completed `nr_squeeze` / `fx` verification and show `git status` plus `git diff --stat` before continuing.
 - If approved, proceed to `futures` market verification using the same setup-verify evidence loop.
 - Do not run Gate A1 until the user gives fresh written approval for digest
-  `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`
+  `ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa`
   and its exact command, and a fresh one-shot approval file is safely issued.
   Never reuse an old digest, approval, or nonce.
 - Do not run Gate B live execution until a fresh v5 envelope binds the final
@@ -201,6 +207,12 @@ Last updated: 2026-07-13
 - 2026-07-13: Regenerated the offline Gate A1 approval envelope at digest
   `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`.
   No approval instance, nonce, or live-valid expiry was issued.
+- 2026-07-13: Replaced the drifted Gate A1 close contract with the fixed
+  read-only `close()` capability preflight and sole no-argument close
+  mutation. Production panel close now uses callable `close()` when
+  `hideWidget` is absent and fails instead of falsely reporting `closed` when
+  no close path exists. Gate B fixed close operations use the same current
+  no-argument close contract without changing operation inventory counts.
 - 2026-07-13: Completed Gate B production runtime v5 at candidate code commit
   `c78f0b5`, with 24 fixed cases, six children, production main, secure lease,
   authenticated session/protocol ledger, restore verification, and immutable

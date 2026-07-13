@@ -454,7 +454,7 @@ const CLOSE_CAPABILITY_FUNCTION_DECLARATION = (function gateA1CloseCapabilityMai
   'gate-a1-close-capability-v1';
   try {
     const bar = window.TradingView && window.TradingView.bottomWidgetBar;
-    return Boolean(bar && typeof bar.hideWidget === 'function');
+    return Boolean(bar && typeof bar.close === 'function');
   } catch {
     return false;
   }
@@ -476,8 +476,8 @@ const CLOSE_FUNCTION_DECLARATION = (function gateA0CloseMainWorld() {
   'gate-a0-close-v1';
   try {
     const bar = window.TradingView && window.TradingView.bottomWidgetBar;
-    if (!bar || typeof bar.hideWidget !== 'function') return false;
-    bar.hideWidget('pine-editor');
+    if (!bar || typeof bar.close !== 'function') return false;
+    bar.close();
     return true;
   } catch {
     return false;

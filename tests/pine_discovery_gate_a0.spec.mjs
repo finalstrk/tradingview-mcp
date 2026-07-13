@@ -14,6 +14,7 @@ import vm from 'node:vm';
 const REPO_ROOT = resolve(new URL('..', import.meta.url).pathname);
 const ARTIFACT_PATH = resolve(REPO_ROOT, 'scripts/pine_discovery_gate_a1.mjs');
 const ARTIFACT_URL = pathToFileURL(ARTIFACT_PATH).href;
+const APPROVAL_ARTIFACT_PATH = resolve(REPO_ROOT, 'docs/gate-a1-close-strategy-approval.md');
 const TEST_HOST_PATH = resolve(REPO_ROOT, 'tests/pine_discovery_gate_a0.spec.mjs');
 const CHILD_FIXTURE_PATH = resolve(REPO_ROOT, 'tests/fixtures/pine_discovery_gate_a0_child.mjs');
 const SPENT_REGISTRY_PATH = resolve(REPO_ROOT, '.git/tradingview-mcp-gate-a1/spent');
@@ -699,7 +700,9 @@ function createFakeCdp({
         if (mode === 'close-capability-nonboolean') {
           return { result: { type: 'string', value: 'true' } };
         }
-        return { result: { type: 'boolean', value: true } };
+        const response = { result: { type: 'boolean', value: true } };
+        applyAfterActionDrift(action);
+        return response;
       }
       if (action === 'open') {
         calls.openActionCalls += 1;
@@ -1269,6 +1272,18 @@ test('Stage B: approval envelope binds exact artifact digest, command, tuple, bu
     'PROCESS_EXIT_CAN_INTERRUPT_FINALLY_AND_LEAVE_EDITOR_OR_SESSION_STATE_UNKNOWN',
   );
   assert.equal(result.parsed.tradingview_page_initiated_network, 'UNKNOWN');
+});
+
+test('Stage B: written approval artifact binds the current digest and sole close() contract', async () => {
+  const source = await readFile(ARTIFACT_PATH);
+  const digest = createHash('sha256').update(source).digest('hex');
+  const approval = await readFile(APPROVAL_ARTIFACT_PATH, 'utf8');
+
+  assert.match(approval, new RegExp(`"bundle_sha256": "${digest}"`));
+  assert.match(approval, new RegExp(`--bundle-sha256=${digest}`));
+  assert.match(approval, /sole approved mutation calls the owner's `close` function/);
+  assert.match(approval, /invocation is exactly `close\(\)`/);
+  assert.doesNotMatch(approval, /typeof window\.TradingView\.bottomWidgetBar\.hideWidget/);
 });
 
 test('Stage B: approval lease is strict, one-shot, concurrent-safe, and crash-residual-safe', async (t) => {
@@ -1967,6 +1982,19 @@ test('Stage D: close capability preflight fail-closes before every effect', asyn
       assert.doesNotMatch(result.state.stdoutWrites[0], /RAW_CLOSE_CAPABILITY_SENTINEL/);
     });
   }
+
+  await t.test('context drift after capability read', async () => {
+    const result = await runDScenario('success', {
+      afterActionDrift: {
+        after: 'close-capability', kind: 'frame', patch: { loaderId: 'loader-drifted' },
+      },
+    });
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.CONTEXT_CHANGED);
+    assertExactLedger(result.parsed, 0, 0, 0);
+    assert.equal(result.fake.calls.openActionCalls, 0);
+    assert.equal(result.fake.calls.closeActionCalls, 0);
+  });
 });
 
 test('Stage D: open failures use fixed secret-safe classifications', async (t) => {
@@ -2072,13 +2100,14 @@ test('Stage D: fixed open and close closures call only the approved bottom-widge
   assert.ok(capabilityParams);
   assert.ok(openParams);
   assert.ok(closeParams);
-  const calls = { activate: 0, click: 0, focus: 0, hide: 0, input: 0, show: 0 };
+  const calls = { activate: 0, click: 0, close: 0, focus: 0, hide: 0, input: 0, show: 0 };
   const sandbox = {
     window: {
       TradingView: {
         bottomWidgetBar: {
           activateScriptEditorTab() { calls.activate += 1; },
-          hideWidget(name) { assert.equal(name, 'pine-editor'); calls.hide += 1; },
+          close(...args) { assert.deepEqual(args, []); calls.close += 1; },
+          hideWidget() { calls.hide += 1; },
           showWidget() { calls.show += 1; },
         },
       },
@@ -2087,7 +2116,7 @@ test('Stage D: fixed open and close closures call only the approved bottom-widge
   assert.equal(vm.runInNewContext(`(${capabilityParams.functionDeclaration})()`, sandbox), true);
   assert.equal(vm.runInNewContext(`(${openParams.functionDeclaration})()`, sandbox), true);
   assert.equal(vm.runInNewContext(`(${closeParams.functionDeclaration})()`, sandbox), true);
-  assert.deepEqual(calls, { activate: 1, click: 0, focus: 0, hide: 1, input: 0, show: 0 });
+  assert.deepEqual(calls, { activate: 1, click: 0, close: 1, focus: 0, hide: 0, input: 0, show: 0 });
 
   assert.equal(vm.runInNewContext(`(${openParams.functionDeclaration})()`, { window: {} }), false);
   assert.equal(vm.runInNewContext(`(${capabilityParams.functionDeclaration})()`, { window: {} }), false);
@@ -2100,10 +2129,10 @@ test('Stage D: fixed open and close closures call only the approved bottom-widge
   }), false);
   assert.equal(vm.runInNewContext(`(${closeParams.functionDeclaration})()`, { window: {} }), false);
   assert.doesNotMatch(openParams.functionDeclaration, /showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/);
-  assert.doesNotMatch(closeParams.functionDeclaration, /showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/);
+  assert.doesNotMatch(closeParams.functionDeclaration, /hideWidget|\.hide\s*\(|showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/);
   assert.doesNotMatch(
     capabilityParams.functionDeclaration,
-    /hideWidget\s*\(|activateScriptEditorTab\s*\(|showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/,
+    /hideWidget\s*\(|activateScriptEditorTab\s*\(|\.close\s*\(|showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/,
   );
 });
 

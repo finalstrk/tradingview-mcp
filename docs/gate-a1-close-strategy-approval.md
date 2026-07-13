@@ -10,8 +10,8 @@ reviewing this file does not authorize that attempt.
 
 ```json
 {
-  "bundle_sha256": "a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477",
-  "exact_command": "node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477",
+  "bundle_sha256": "ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa",
+  "exact_command": "node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa",
   "target_id": "119DB9629A03197CFB120366EA6729CC",
   "initial_tuple": {
     "symbol": "FX:USDJPY",
@@ -123,11 +123,10 @@ be generated safely only after fresh written approval of this exact artifact.
 
 - Close owner: `window.TradingView.bottomWidgetBar` in the fixed main-world
   context.
-- Close path: the sole approved mutation calls the owner's `hideWidget`
-  function.
-- Close argument: the exact literal `pine-editor`.
+- Close path: the sole approved mutation calls the owner's `close` function.
+- Close argument: none; the invocation is exactly `close()`.
 - Capability preflight: before opening, a read-only call proves
-  `typeof window.TradingView.bottomWidgetBar.hideWidget === 'function'`.
+  `typeof window.TradingView.bottomWidgetBar.close === 'function'`.
   Missing, throwing, timed-out, non-boolean, changed, or disappearing
   capability detected during this preflight fails closed with open/probe/close
   counters all zero. Capability loss after preflight is still possible; it
@@ -202,7 +201,7 @@ remain false until those events occur.
 {
   "schema": "tradingview-mcp.gate-a1-close-strategy-approval.v1",
   "artifact_status": "PENDING_FRESH_WRITTEN_APPROVAL",
-  "bundle_sha256_expected": "a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477",
+  "bundle_sha256_expected": "ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa",
   "exact_command_matches_envelope": true,
   "target_id_exact": true,
   "initial_tuple_exact": true,
@@ -281,9 +280,9 @@ invalid and must never be reused.
 
 Suggested written approval, with the digest and command retained verbatim:
 
-> Gate A1 envelope `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`
+> Gate A1 envelope `ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa`
 > and exact command
-> `node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`
+> `node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa`
 > are approved for one attempt against target
 > `119DB9629A03197CFB120366EA6729CC` only. I accept open/probe/close budgets
 > 1/1/1, retry/fallback 0, the forbidden effects above, page-initiated network

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 
 import {
   CHART_OPERATION_REGISTRY,
@@ -110,4 +111,31 @@ test('adapter failures are replaced without retaining secret-bearing causes', as
       return true;
     },
   );
+});
+
+test('fixed bottom-panel cleanup operations use close() once with no hidden fallback', () => {
+  const closeOperationIds = [
+    'chart.op.047', 'chart.op.050', 'chart.op.053',
+    'chart.op.055', 'chart.op.085', 'chart.op.143',
+  ];
+  for (const id of closeOperationIds) {
+    const declaration = CHART_OPERATION_REGISTRY[id].params.functionDeclaration;
+    const calls = [];
+    const sandbox = {
+      window: {
+        TradingView: {
+          bottomWidgetBar: {
+            close(...args) { calls.push(args); return true; },
+            hide() { throw new Error('hide fallback is forbidden'); },
+            hideWidget() { throw new Error('removed API must not be selected'); },
+          },
+        },
+      },
+    };
+
+    vm.runInNewContext(`(${declaration})()`, sandbox);
+
+    assert.deepEqual(calls, [[]], `${id} must call close exactly once with no arguments`);
+    assert.doesNotMatch(declaration, /hideWidget|\.hide\s*\(/);
+  }
 });
