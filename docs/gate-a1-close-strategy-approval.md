@@ -1,4 +1,4 @@
-# Gate A1 close-strategy approval artifact
+# Gate A1 UI-strategy approval artifact
 
 Status: `PENDING_FRESH_WRITTEN_APPROVAL`
 
@@ -10,8 +10,8 @@ reviewing this file does not authorize that attempt.
 
 ```json
 {
-  "bundle_sha256": "ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa",
-  "exact_command": "node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa",
+  "bundle_sha256": "cb9461dae3e319cd0eee5ab68d42f1b9723b024d12b6b24f74b13642fc08ae65",
+  "exact_command": "node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=cb9461dae3e319cd0eee5ab68d42f1b9723b024d12b6b24f74b13642fc08ae65",
   "target_id": "119DB9629A03197CFB120366EA6729CC",
   "initial_tuple": {
     "symbol": "FX:USDJPY",
@@ -119,7 +119,16 @@ written to the spent filename or marker, or emitted to stdout/stderr.
 No approval instance, nonce, or live-valid expiry exists yet. Those values may
 be generated safely only after fresh written approval of this exact artifact.
 
-## Close contract and proof boundary
+## UI mutation contract and proof boundary
+
+- Open owner: `window.TradingView.bottomWidgetBar` in the fixed main-world
+  context.
+- Open capability preflight: before any UI mutation, a read-only call proves
+  `typeof window.TradingView.bottomWidgetBar.showWidget === 'function'`.
+  Missing, throwing, timed-out, non-boolean, changed, or disappearing
+  capability fails closed with open/probe/close counters all zero.
+- Open path: the sole approved mutation calls the owner's `showWidget` function.
+- Open argument: exactly `'pine-editor'`; the invocation is exactly `showWidget('pine-editor')`.
 
 - Close owner: `window.TradingView.bottomWidgetBar` in the fixed main-world
   context.
@@ -138,17 +147,20 @@ be generated safely only after fresh written approval of this exact artifact.
   fallback.
 - Visibility proof: editor visibility is only the boolean result of the fixed
   selector `.monaco-editor.pine-editor-monaco`. Open and close are each proved
-  by at most eight finite polls. A callable method or successful invocation is
-  not itself visibility proof.
+  by at most 50 finite polls separated by 200 ms waits (10 s maximum per
+  direction). A callable method or successful invocation is not itself
+  visibility proof.
 - Deadlines: each CDP operation has a 1,000 ms deadline; work is limited to
   20,000 ms; 10,000 ms is reserved for cleanup; the total hard deadline is
   30,000 ms.
 
 The open action is
-`window.TradingView.bottomWidgetBar.activateScriptEditorTab()` and is allowed
-at most once. The secret-safe read-only discovery probe is allowed only after
-visibility is proved open and is allowed at most once. The close action is
-allowed at most once, including failure or unknown outcome.
+`window.TradingView.bottomWidgetBar.showWidget('pine-editor')` and is allowed
+at most once. There is no activate-tab fallback, DOM click, keyboard input,
+focus operation, or second open mutation. The secret-safe read-only discovery
+probe is allowed only after visibility is proved open and is allowed at most
+once. The close action is allowed at most once, including failure or unknown
+outcome.
 
 ## Residual-state and effect limits
 
@@ -201,13 +213,17 @@ remain false until those events occur.
 {
   "schema": "tradingview-mcp.gate-a1-close-strategy-approval.v1",
   "artifact_status": "PENDING_FRESH_WRITTEN_APPROVAL",
-  "bundle_sha256_expected": "ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa",
+  "bundle_sha256_expected": "cb9461dae3e319cd0eee5ab68d42f1b9723b024d12b6b24f74b13642fc08ae65",
   "exact_command_matches_envelope": true,
   "target_id_exact": true,
   "initial_tuple_exact": true,
   "close_owner_exact": true,
   "close_path_exact": true,
   "close_argument_exact": true,
+  "open_owner_exact": true,
+  "open_capability_preflight_required": true,
+  "open_path_exact": true,
+  "open_argument_exact": true,
   "identity_checks_required": true,
   "visibility_proof_required": true,
   "finite_deadlines_bound": true,
@@ -280,11 +296,13 @@ invalid and must never be reused.
 
 Suggested written approval, with the digest and command retained verbatim:
 
-> Gate A1 envelope `ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa`
+> Gate A1 envelope `cb9461dae3e319cd0eee5ab68d42f1b9723b024d12b6b24f74b13642fc08ae65`
 > and exact command
-> `node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa`
+> `node scripts/pine_discovery_gate_a1.mjs --bundle-sha256=cb9461dae3e319cd0eee5ab68d42f1b9723b024d12b6b24f74b13642fc08ae65`
 > are approved for one attempt against target
 > `119DB9629A03197CFB120366EA6729CC` only. I accept open/probe/close budgets
-> 1/1/1, retry/fallback 0, the forbidden effects above, page-initiated network
+> 1/1/1, the read-only `showWidget` capability preflight, the sole
+> `showWidget('pine-editor')` open mutation, 50 x 200 ms visibility polls,
+> retry/fallback 0, the forbidden effects above, page-initiated network
 > `UNKNOWN`, and the possibility that failure or hard exit leaves editor/session
 > residual state `UNKNOWN`. This does not approve Gate B or full live E2E.

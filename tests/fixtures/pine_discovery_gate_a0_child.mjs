@@ -88,6 +88,7 @@ function mappedDelay(delay) {
   if (delay === 10000) return 10;
   if (delay === 30000) return 30;
   if (delay === 100) return 2;
+  if (delay === 200) return 2;
   return Math.min(Number(delay) || 0, 5);
 }
 
@@ -244,6 +245,7 @@ function classify(functionDeclaration) {
   if (functionDeclaration.includes('pineSignalDiscoveryMainWorld')) return 'probe';
   if (functionDeclaration.includes('gate-a0-preflight-v1')) return 'preflight';
   if (functionDeclaration.includes('gate-a1-close-capability-v1')) return 'close-capability';
+  if (functionDeclaration.includes('gate-a1-open-capability-v1')) return 'open-capability';
   if (functionDeclaration.includes('gate-a0-open-v1')) return 'open';
   if (functionDeclaration.includes('gate-a0-close-v1')) return 'close';
   if (functionDeclaration.includes('gate-a0-postflight-v1')) return 'postflight';
@@ -301,6 +303,7 @@ function createFakeCdp() {
       const action = classify(params.functionDeclaration);
       if (action === 'preflight') return { result: { type: 'boolean', value: true } };
       if (action === 'close-capability') return { result: { type: 'boolean', value: true } };
+      if (action === 'open-capability') return { result: { type: 'boolean', value: true } };
       if (action === 'open') {
         calls.open += 1;
         visibilityPhase = 'after-open';

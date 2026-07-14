@@ -105,6 +105,7 @@ const EXPECTED_ERROR_CODES = Object.freeze({
   CONTEXT_CHANGED: 'PINE_DISCOVERY_CONTEXT_CHANGED',
   PREFLIGHT: 'PINE_DISCOVERY_PREFLIGHT',
   CLOSE_CAPABILITY: 'PINE_DISCOVERY_CLOSE_CAPABILITY',
+  OPEN_CAPABILITY: 'PINE_DISCOVERY_OPEN_CAPABILITY',
   OPEN: 'PINE_DISCOVERY_OPEN',
   OPEN_ACTION_REJECTED: 'PINE_DISCOVERY_OPEN_ACTION_REJECTED',
   OPEN_NON_BOOLEAN: 'PINE_DISCOVERY_OPEN_NON_BOOLEAN',
@@ -207,6 +208,7 @@ function createTimerHarness(observer) {
     if (delay === 10000) return 100;
     if (delay === 30000) return 300;
     if (delay === 100) return 2;
+    if (delay === 200) return 2;
     return Math.min(Number(delay) || 0, 5);
   };
   return {
@@ -567,6 +569,7 @@ function classifyDeclaration(functionDeclaration, probeDeclaration) {
   for (const [marker, name] of [
     ['gate-a0-preflight-v1', 'preflight'],
     ['gate-a1-close-capability-v1', 'close-capability'],
+    ['gate-a1-open-capability-v1', 'open-capability'],
     ['gate-a0-open-v1', 'open'],
     ['gate-a0-close-v1', 'close'],
     ['gate-a0-postflight-v1', 'postflight'],
@@ -600,6 +603,7 @@ function createFakeCdp({
     actionOrder: [],
     callFunctionOn: [],
     closeActionCalls: 0,
+    openCapabilityCalls: 0,
     connectArgs: [],
     connectCount: 0,
     inputCalls: 0,
@@ -704,6 +708,20 @@ function createFakeCdp({
         applyAfterActionDrift(action);
         return response;
       }
+      if (action === 'open-capability') {
+        calls.openCapabilityCalls += 1;
+        if (mode === 'open-capability-throw') throw new Error('RAW_OPEN_CAPABILITY_SENTINEL');
+        if (mode === 'open-capability-hang') return neverSettles();
+        if (mode === 'open-capability-missing' || mode === 'open-capability-disappear') {
+          return { result: { type: 'boolean', value: false } };
+        }
+        if (mode === 'open-capability-nonboolean') {
+          return { result: { type: 'string', value: 'true' } };
+        }
+        const response = { result: { type: 'boolean', value: true } };
+        applyAfterActionDrift(action);
+        return response;
+      }
       if (action === 'open') {
         calls.openActionCalls += 1;
         visibilityPhase = 'after-open';
@@ -766,7 +784,7 @@ function createFakeCdp({
             return { result: { type: 'boolean', value: false } };
           }
           const visible = mode === 'visibility-open-delayed'
-            ? calls.visibilityAfterOpen >= 8
+            ? calls.visibilityAfterOpen >= 50
             : true;
           return { result: { type: 'boolean', value: visible } };
         }
@@ -798,7 +816,7 @@ function createFakeCdp({
             return { result: { type: 'boolean', value: true } };
           }
           const visible = mode === 'visibility-close-delayed'
-            ? calls.visibilityAfterClose < 8
+            ? calls.visibilityAfterClose < 50
             : false;
           return { result: { type: 'boolean', value: visible } };
         }
@@ -833,7 +851,7 @@ function createFakeCdp({
       const faultCall = identityFault?.boundary === 'pre-open'
         ? 3
         : identityFault?.boundary === 'pre-probe'
-          ? 7
+          ? 9
           : -1;
       const faultActive = calls.targetInfoCount === faultCall
         || (identityFaultTriggered && identityFault?.cleanup === 'reject');
@@ -1274,7 +1292,7 @@ test('Stage B: approval envelope binds exact artifact digest, command, tuple, bu
   assert.equal(result.parsed.tradingview_page_initiated_network, 'UNKNOWN');
 });
 
-test('Stage B: written approval artifact binds the current digest and sole close() contract', async () => {
+test('Stage B: written approval artifact binds the current digest and fixed UI contracts', async () => {
   const source = await readFile(ARTIFACT_PATH);
   const digest = createHash('sha256').update(source).digest('hex');
   const approval = await readFile(APPROVAL_ARTIFACT_PATH, 'utf8');
@@ -1283,6 +1301,9 @@ test('Stage B: written approval artifact binds the current digest and sole close
   assert.match(approval, new RegExp(`--bundle-sha256=${digest}`));
   assert.match(approval, /sole approved mutation calls the owner's `close` function/);
   assert.match(approval, /invocation is exactly `close\(\)`/);
+  assert.match(approval, /sole approved mutation calls the owner's `showWidget` function/);
+  assert.match(approval, /invocation is exactly `showWidget\('pine-editor'\)`/);
+  assert.match(approval, /50 finite polls/);
   assert.doesNotMatch(approval, /typeof window\.TradingView\.bottomWidgetBar\.hideWidget/);
 });
 
@@ -1935,6 +1956,7 @@ test('Stage D: success follows fixed order with exact budgets and closed residua
     'connect',
     'preflight',
     'close-capability',
+    'open-capability',
     'open',
     'probe',
     'close',
@@ -1992,6 +2014,41 @@ test('Stage D: close capability preflight fail-closes before every effect', asyn
     assert.equal(result.exitCode, 1);
     assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.CONTEXT_CHANGED);
     assertExactLedger(result.parsed, 0, 0, 0);
+    assert.equal(result.fake.calls.openActionCalls, 0);
+    assert.equal(result.fake.calls.closeActionCalls, 0);
+  });
+});
+
+test('Stage D: open capability preflight fail-closes before the sole open action', async (t) => {
+  for (const mode of [
+    'open-capability-missing',
+    'open-capability-throw',
+    'open-capability-hang',
+    'open-capability-nonboolean',
+    'open-capability-disappear',
+  ]) {
+    await t.test(mode, async () => {
+      const result = await runDScenario(mode);
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.OPEN_CAPABILITY);
+      assertExactLedger(result.parsed, 0, 0, 0);
+      assert.equal(result.fake.calls.openCapabilityCalls, 1);
+      assert.equal(result.fake.calls.openActionCalls, 0);
+      assert.equal(result.fake.calls.closeActionCalls, 0);
+      assert.doesNotMatch(result.state.stdoutWrites[0], /RAW_OPEN_CAPABILITY_SENTINEL/);
+    });
+  }
+
+  await t.test('context drift after capability read', async () => {
+    const result = await runDScenario('success', {
+      afterActionDrift: {
+        after: 'open-capability', kind: 'frame', patch: { loaderId: 'loader-drifted' },
+      },
+    });
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.parsed.error_code, EXPECTED_ERROR_CODES.CONTEXT_CHANGED);
+    assertExactLedger(result.parsed, 0, 0, 0);
+    assert.equal(result.fake.calls.openCapabilityCalls, 1);
     assert.equal(result.fake.calls.openActionCalls, 0);
     assert.equal(result.fake.calls.closeActionCalls, 0);
   });
@@ -2093,11 +2150,14 @@ test('Stage D: fixed open and close closures call only the approved bottom-widge
   const result = await runDScenario('success');
   const capabilityParams = result.fake.calls.callFunctionOn.find((params) =>
     classifyDeclaration(params.functionDeclaration, result.probeDeclaration) === 'close-capability');
+  const openCapabilityParams = result.fake.calls.callFunctionOn.find((params) =>
+    classifyDeclaration(params.functionDeclaration, result.probeDeclaration) === 'open-capability');
   const openParams = result.fake.calls.callFunctionOn.find((params) =>
     classifyDeclaration(params.functionDeclaration, result.probeDeclaration) === 'open');
   const closeParams = result.fake.calls.callFunctionOn.find((params) =>
     classifyDeclaration(params.functionDeclaration, result.probeDeclaration) === 'close');
   assert.ok(capabilityParams);
+  assert.ok(openCapabilityParams);
   assert.ok(openParams);
   assert.ok(closeParams);
   const calls = { activate: 0, click: 0, close: 0, focus: 0, hide: 0, input: 0, show: 0 };
@@ -2108,7 +2168,7 @@ test('Stage D: fixed open and close closures call only the approved bottom-widge
           activateScriptEditorTab() { calls.activate += 1; },
           close(...args) { assert.deepEqual(args, []); calls.close += 1; },
           hideWidget() { calls.hide += 1; },
-          showWidget() { calls.show += 1; },
+          showWidget(...args) { assert.deepEqual(args, ['pine-editor']); calls.show += 1; },
         },
       },
     },
@@ -2116,9 +2176,11 @@ test('Stage D: fixed open and close closures call only the approved bottom-widge
   assert.equal(vm.runInNewContext(`(${capabilityParams.functionDeclaration})()`, sandbox), true);
   assert.equal(vm.runInNewContext(`(${openParams.functionDeclaration})()`, sandbox), true);
   assert.equal(vm.runInNewContext(`(${closeParams.functionDeclaration})()`, sandbox), true);
-  assert.deepEqual(calls, { activate: 1, click: 0, close: 1, focus: 0, hide: 0, input: 0, show: 0 });
+  assert.equal(vm.runInNewContext(`(${openCapabilityParams.functionDeclaration})()`, sandbox), true);
+  assert.deepEqual(calls, { activate: 0, click: 0, close: 1, focus: 0, hide: 0, input: 0, show: 1 });
 
   assert.equal(vm.runInNewContext(`(${openParams.functionDeclaration})()`, { window: {} }), false);
+  assert.equal(vm.runInNewContext(`(${openCapabilityParams.functionDeclaration})()`, { window: {} }), false);
   assert.equal(vm.runInNewContext(`(${capabilityParams.functionDeclaration})()`, { window: {} }), false);
   assert.equal(vm.runInNewContext(`(${capabilityParams.functionDeclaration})()`, {
     window: {
@@ -2128,7 +2190,9 @@ test('Stage D: fixed open and close closures call only the approved bottom-widge
     },
   }), false);
   assert.equal(vm.runInNewContext(`(${closeParams.functionDeclaration})()`, { window: {} }), false);
-  assert.doesNotMatch(openParams.functionDeclaration, /showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/);
+  assert.match(openParams.functionDeclaration, /showWidget\s*\(\s*['"]pine-editor['"]\s*\)/);
+  assert.doesNotMatch(openParams.functionDeclaration, /activateScriptEditorTab|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/);
+  assert.doesNotMatch(openCapabilityParams.functionDeclaration, /showWidget\s*\(|activateScriptEditorTab\s*\(|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/);
   assert.doesNotMatch(closeParams.functionDeclaration, /hideWidget|\.hide\s*\(|showWidget|\.click\s*\(|\.focus\s*\(|Input|dispatchKeyEvent/);
   assert.doesNotMatch(
     capabilityParams.functionDeclaration,
@@ -2212,10 +2276,10 @@ test('Stage D: visibility read failures never fabricate a CLOSED observation', a
   });
 });
 
-test('Stage D: each visibility direction may poll eight times while its action remains exactly once', async (t) => {
+test('Stage D: each visibility direction may poll fifty times while its action remains exactly once', async (t) => {
   for (const [mode, openReads, closeReads] of [
-    ['visibility-open-delayed', 8, 1],
-    ['visibility-close-delayed', 1, 8],
+    ['visibility-open-delayed', 50, 1],
+    ['visibility-close-delayed', 1, 50],
   ]) {
     await t.test(mode, async () => {
       const result = await runDScenario(mode);

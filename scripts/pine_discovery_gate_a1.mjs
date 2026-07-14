@@ -79,6 +79,7 @@ export const PROBE_ERROR_CODES = Object.freeze({
   CONTEXT_CHANGED: 'PINE_DISCOVERY_CONTEXT_CHANGED',
   PREFLIGHT: 'PINE_DISCOVERY_PREFLIGHT',
   CLOSE_CAPABILITY: 'PINE_DISCOVERY_CLOSE_CAPABILITY',
+  OPEN_CAPABILITY: 'PINE_DISCOVERY_OPEN_CAPABILITY',
   OPEN: 'PINE_DISCOVERY_OPEN',
   OPEN_ACTION_REJECTED: 'PINE_DISCOVERY_OPEN_ACTION_REJECTED',
   OPEN_NON_BOOLEAN: 'PINE_DISCOVERY_OPEN_NON_BOOLEAN',
@@ -415,8 +416,12 @@ function pineSignalDiscoveryMainWorld() {
 export const PROBE_FUNCTION_DECLARATION = pineSignalDiscoveryMainWorld.toString();
 
 const OBJECT_GROUP = 'tradingview-mcp-pine-discovery-v1';
-const VISIBILITY_POLL_MS = 100;
-const VISIBILITY_POLL_LIMIT = 8;
+// TradingView Desktop opens the Pine editor asynchronously.  The fixed
+// upstream contract allows 50 x 200 ms visibility reads (10 s total), which
+// stays inside the 20 s work and 10 s cleanup reserves without another UI
+// mutation.
+const VISIBILITY_POLL_MS = 200;
+const VISIBILITY_POLL_LIMIT = 50;
 const DESTROYED_CONTEXT_NUMERIC_KEY = 'execution' + 'ContextId';
 
 const PREFLIGHT_FUNCTION_DECLARATION = (function gateA0PreflightMainWorld() {
@@ -460,12 +465,22 @@ const CLOSE_CAPABILITY_FUNCTION_DECLARATION = (function gateA1CloseCapabilityMai
   }
 }).toString();
 
+const OPEN_CAPABILITY_FUNCTION_DECLARATION = (function gateA1OpenCapabilityMainWorld() {
+  'gate-a1-open-capability-v1';
+  try {
+    const bar = window.TradingView && window.TradingView.bottomWidgetBar;
+    return Boolean(bar && typeof bar.showWidget === 'function');
+  } catch {
+    return false;
+  }
+}).toString();
+
 const OPEN_FUNCTION_DECLARATION = (function gateA0OpenMainWorld() {
   'gate-a0-open-v1';
   try {
     const bar = window.TradingView && window.TradingView.bottomWidgetBar;
-    if (!bar || typeof bar.activateScriptEditorTab !== 'function') return false;
-    bar.activateScriptEditorTab();
+    if (!bar || typeof bar.showWidget !== 'function') return false;
+    bar.showWidget('pine-editor');
     return true;
   } catch {
     return false;
@@ -1199,7 +1214,8 @@ function safeMainCombination(payload, hasProbe, phase, visibilityEvidence) {
         && open === 0 && probe === 0 && close === 0 && !hasProbe;
     case RUN_PHASE.PREFLIGHT:
       return (payload.error_code === PROBE_ERROR_CODES.PREFLIGHT
-          || payload.error_code === PROBE_ERROR_CODES.CLOSE_CAPABILITY)
+          || payload.error_code === PROBE_ERROR_CODES.CLOSE_CAPABILITY
+          || payload.error_code === PROBE_ERROR_CODES.OPEN_CAPABILITY)
         && open === 0 && probe === 0 && close === 0 && !hasProbe;
     case RUN_PHASE.BEFORE_OPEN:
       return (payload.error_code === PROBE_ERROR_CODES.CONTEXT_CHANGED
@@ -1944,6 +1960,30 @@ async function runNormalProbeFlow(cdp, progress, state) {
   const closeCapabilityValue = remoteBoolean(closeCapability.value);
   if (!closeCapabilityValue.ok || closeCapabilityValue.value !== true) {
     return { ok: false, errorCode: PROBE_ERROR_CODES.CLOSE_CAPABILITY, probe: null };
+  }
+
+  const openCapability = await callMainWorld(
+    client,
+    OPEN_CAPABILITY_FUNCTION_DECLARATION,
+    state,
+  );
+  if (!openCapability.ok) {
+    if (openCapability.contextChanged || openCapability.identityCheck) {
+      state.phase = RUN_PHASE.BEFORE_OPEN;
+    }
+    return {
+      ok: false,
+      errorCode: openCapability.contextChanged
+        ? PROBE_ERROR_CODES.CONTEXT_CHANGED
+        : openCapability.identityCheck && openCapability.deadline
+          ? PROBE_ERROR_CODES.DEADLINE
+          : PROBE_ERROR_CODES.OPEN_CAPABILITY,
+      probe: null,
+    };
+  }
+  const openCapabilityValue = remoteBoolean(openCapability.value);
+  if (!openCapabilityValue.ok || openCapabilityValue.value !== true) {
+    return { ok: false, errorCode: PROBE_ERROR_CODES.OPEN_CAPABILITY, probe: null };
   }
 
   state.phase = RUN_PHASE.BEFORE_OPEN;

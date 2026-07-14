@@ -21,7 +21,7 @@ Last updated: 2026-07-13
 - Gate A0 Pine discovery is implemented and independently Approved. After the
   P1-07/P1-08 approval-boundary hardening, the offline A0 suite passes 191/191
   on repeated runs. The current digest-bound Gate A1 artifact is
-  `ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa`.
+  `cb9461dae3e319cd0eee5ab68d42f1b9723b024d12b6b24f74b13642fc08ae65`.
   Every earlier digest, approval, and nonce is invalid.
 - An earlier Gate A1 attempt used its exact command, target tuple, budgets, and
   residual caveat are frozen in the A0 approval envelope. The one approved attempt
@@ -131,7 +131,7 @@ Last updated: 2026-07-13
 - Stop after completed `nr_squeeze` / `fx` verification and show `git status` plus `git diff --stat` before continuing.
 - If approved, proceed to `futures` market verification using the same setup-verify evidence loop.
 - Do not run Gate A1 until the user gives fresh written approval for digest
-  `ae713fe506d90af4b3543ff3b79670c44d4c4ed844e35602cb055258cfb31cfa`
+  `cb9461dae3e319cd0eee5ab68d42f1b9723b024d12b6b24f74b13642fc08ae65`
   and its exact command, and a fresh one-shot approval file is safely issued.
   Never reuse an old digest, approval, or nonce.
 - Do not run Gate B live execution until a fresh v5 envelope binds the final
@@ -208,8 +208,14 @@ Last updated: 2026-07-13
   Important 0, and Minor 0. `npm test` safe-stopped with a zero-action ledger;
   no live/CDP/UI/network operation was performed.
 - 2026-07-13: Regenerated the offline Gate A1 approval envelope at digest
-  `a856202346587e399ff5326bf8be9cebe63b05cd0814081e6b6366627e465477`.
+  `cb9461dae3e319cd0eee5ab68d42f1b9723b024d12b6b24f74b13642fc08ae65`.
   No approval instance, nonce, or live-valid expiry was issued.
+- 2026-07-13: Rebound the offline Gate A1 open contract to the fixed
+  read-only `showWidget` capability preflight and sole
+  `showWidget('pine-editor')` mutation. Open and close visibility now use up to
+  50 x 200 ms finite polls; no activate-tab, DOM-click, keyboard, focus, or
+  second mutation fallback is permitted. Current-target callability remains
+  unverified until a fresh exact approval and one-shot run.
 - 2026-07-13: Replaced the drifted Gate A1 close contract with the fixed
   read-only `close()` capability preflight and sole no-argument close
   mutation. Production panel close now uses callable `close()` when
