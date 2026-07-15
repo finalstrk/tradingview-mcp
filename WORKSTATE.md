@@ -1,6 +1,34 @@
 # WORKSTATE
 
-Last updated: 2026-07-13
+Last updated: 2026-07-15
+
+## DT Pair-Trader layer (2026-07-15) — BUILT, unverified live
+
+- 新規レイヤー: リアルタイム・ペアトレーディング支援。3層コスト設計
+  （main=オーケストレーションのみ / Sonnet サブエージェント4種 / 重い推論は
+  Codex gpt-5.6-sol high へ wrapper 委譲。2026-07-15 に gpt-5.5 xhigh から
+  リプレイス。`CODEX_BIN=/Users/yukio/bin/codex` 必須 — nvm 側 v0.137 は
+  gpt-5.6-sol 未対応）。
+- 成果物: `.claude/agents/{market-watcher,setup-analyst,risk-officer,journal-scribe}.md`、
+  `.claude/commands/pair-session.md`、`docs/pair-trader.md`、`.gitignore` に `._*` 追加。
+- ガードレール: registry `adopted` のみライブ判定、発注・執行は常に人間、
+  判定は journal JSONL に全件記録（GO/WAIT/NO-GO）、breakdown 100点スケール
+  （setup30/mtf20/level15/session10/track10/rr15）。
+- 既知の制約:
+  - `codex-from-claude.sh exec` は常に `--dangerously-bypass-approvals-and-sandbox`
+    を付与するため Codex 内部 sandbox は無効。ガードはプロンプト指示
+    （"Output analysis text only..."）+ 実行後 `git status --porcelain` 検証。
+  - 新規 agent 定義は次セッションから subagent_type として有効（当日セッションでは未登録）。
+  - この sandbox シェルでは `node` が nvm lazy-load 破損で直接実行不可の環境がある
+    （journal-scribe の `node scripts/journal_stats.js` が失敗しうる）。
+- codex-review 2巡実施（gpt-5.6-sol high）。1巡目 high 7 / medium 2 → 修正、
+  2巡目の残指摘のうち「Bash のコマンド単位 allowlist 強制」は agent frontmatter の
+  表現力上不可のため Known Limitations として文書化（hook 強制は将来課題）。
+  watcher の denylist は MCP ツール名プレフィックス未確定のため初回ライブ実行で
+  実名確認が必要（docs/pair-trader.md Known Limitations 参照）。
+- 未実施: ライブ TradingView 接続での /pair-session 実走検証（MCP ツール実名確認
+  含む）、commit 済み範囲以降の追加変更。
+
 
 ## Side project: quant-github-atlas (2026-07-07) — COMPLETED
 
