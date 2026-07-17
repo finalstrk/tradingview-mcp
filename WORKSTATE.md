@@ -2,6 +2,39 @@
 
 Last updated: 2026-07-17
 
+## Scalping evidence research + 4 candidate setups (2026-07-17) — IN PROGRESS
+
+- 100体の Codex (gpt-5.6-sol, effort high, read-only sandbox, web search) 調査
+  ワークフロー実施（85/100成功）。10ファミリー統合 → `docs/research/scalping-20260717/`
+  （raw 87本、family_*.md 10本、REPORT.md）。
+- 総括は誠実に負寄り: コスト・OOS適用後に大半のエッジは消滅。生き残った4ロジックを
+  DT setup として実装（全て candidate、adopted ゲートは不変・adopted 0件）:
+  `torb`（IEEE Access 査読、指数先物・1分OR）/ `intraday_momo`（JFE + 62先物46年、
+  SPY変種は独立再検証で負け→先物優先）/ `noise_break`（SSRN + 3独立記事、Grade B）/
+  `vwap_rsi_pullback`（QQQ単一研究、Grade B）。
+- 成果物: `pine/setups/{torb,intraday_momo,noise_break,vwap_rsi_pullback}/`
+  （indicator + strategy + README）、`journal/specs/*_spec.json`（strategy-spec-check
+  全通過・watch/paper-only）、registry 4エントリ追加、
+  `tests/scalp_setups_contract.test.js`（test:unit 登録済み）、
+  PINE_CONVENTIONS.md allowlist 追加、agent定義
+  `.claude/agents/codex-scalp-{researcher,implementer}.md`。
+- 検証（完了）: セットアップ別敵対的レビュー 4/4 PASS → Codex (gpt-5.6-sol high)
+  レビュー3巡（R1: critical 1 + high 14 → 修正 / R2: 新規 high 5（time_close の
+  セッション判定はバー開始時刻基準、RTH-only での inSession[1] 遷移不発 等）→ 修正 /
+  R3: f_minToHHMM 整数化漏れ1件 → 修正 → micro-review `VERDICT: ok`）。
+  `npm run test:unit` 486/486 PASS。全8 Pineファイルを live TradingView で
+  pine_smart_compile 検証（エラー0、momo strategy に情報警告1のみ）。
+- インシデント（復旧済み）: pine_smart_compile の保存が active slot の
+  「増田式 Daily Watchlist v1」に上書きされていた。`pine/screeners/masuda_daily_watchlist.pine`
+  から復元・保存し、pine_get_source でタイトル・82行・内容一致を検証済み。
+  クラウド版履歴に旧版あり。以後のコンパイル検証は復元手順を必須化。
+- 並行セッション注意: 本ブランチは別の自動化セッションが 13:25/15:35 に書き換えており、
+  HEAD には本作業の中間版が `feat(scalp): Add candidate setup pack` として取り込み済み。
+  最終版（レビュー3巡通過後）は未コミットの working-tree 差分（13ファイル +815/-347）。
+  コミットはユーザー判断待ち。
+- 境界: 全て paper/研究層。live 判定対象になるには既存 setup-verify バックテスト
+  ゲート通過が必要。発注・執行は常に人間。
+
 ## DT Pair-Trader layer (2026-07-15) — BUILT, unverified live
 
 - 新規レイヤー: リアルタイム・ペアトレーディング支援。3層コスト設計

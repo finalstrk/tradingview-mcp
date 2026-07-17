@@ -50,10 +50,15 @@ setup-verify → adopted pipeline:
 - Registry: 4 new `candidate` entries in `journal/registry.json`; zero adopted.
 - Contract test: `tests/scalp_setups_contract.test.js` (registered in
   `test:unit`).
-- Verification: per-setup adversarial review (4/4 pass after one fix round),
-  plus a cross-cutting Codex (gpt-5.6-sol high) final review whose findings
-  were remediated; Pine files are statically reviewed but NOT yet compiled on
-  live TradingView (`pine_smart_compile` pending — requires CDP).
+- Verification: per-setup adversarial review (4/4 pass after one fix round);
+  three Codex (gpt-5.6-sol, effort high) review rounds — R1 found 1 critical +
+  14 high (repainting gates, bar-timing semantics, session-preset coupling),
+  R2 found 5 more high (the `na(time_close(session))` session-end idiom never
+  fires because session membership keys off bar open time; `inSession[1]`
+  transitions never re-fire on RTH-only feeds), R3 found one integer-floor bug
+  in a derived-session-string helper; all were fixed and the final micro-review
+  returned `VERDICT: ok`. All 8 Pine files compile with 0 errors on the live
+  TradingView Pine v6 compiler. `npm run test:unit` passes 486/486.
 
 ## Non-negotiable boundary
 
