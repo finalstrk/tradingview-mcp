@@ -437,26 +437,44 @@
       "status": "candidate",
       "markets": {
         "fx": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "5",
             "15"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null,
-          "notes": "Currency futures showed the weakest effect (Sharpe 0.87) in the 1974-2020 extension; low priority."
+          "evidence": [
+            "journal/backtests/intraday_momo__FX_USDJPY__5__20260717.json",
+            "journal/backtests/intraday_momo__FX_USDJPY__15__20260717.json",
+            "journal/backtests/intraday_momo__FX_EURUSD__5__20260717.json",
+            "journal/backtests/intraday_momo__FX_EURUSD__15__20260717.json",
+            "journal/backtests/intraday_momo__FX_GBPUSD__5__20260717.json",
+            "journal/backtests/intraday_momo__FX_GBPUSD__15__20260717.json",
+            "journal/backtests/intraday_momo__FX_AUDUSD__5__20260717.json",
+            "journal/backtests/intraday_momo__FX_AUDUSD__15__20260717.json"
+          ],
+          "bt_winrate": 0.346073,
+          "bt_pf": 0.363791,
+          "notes": "NY preset, declared 10% equity sizing. 5m history ~3.2 months -> n<100 on all four pairs (62-85 trades). All four 15m runs sufficient (n=145-180) and all fail: WR 26-38%, PF 0.19-0.43. Majority (4/4) fail -> rejected. Consistent with registry prior: currency variant weakest in source research.",
+          "updated": "2026-07-17"
         },
         "futures": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "5",
             "15"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null,
-          "notes": "Preferred variant per docs/research/scalping-20260717/family_meta.md: index futures 1974-2020 Sharpe 1.73; SPY-specific 2010-2018 replication was NEGATIVE (Sharpe -2.70)."
+          "evidence": [
+            "journal/backtests/intraday_momo__CME_MINI_DL_ES1__5__20260717.json",
+            "journal/backtests/intraday_momo__CME_MINI_DL_ES1__15__20260717.json",
+            "journal/backtests/intraday_momo__CME_MINI_DL_NQ1__5__20260717.json",
+            "journal/backtests/intraday_momo__CME_MINI_DL_NQ1__15__20260717.json",
+            "journal/backtests/intraday_momo__CBOT_MINI_DL_YM1__5__20260717.json",
+            "journal/backtests/intraday_momo__CBOT_MINI_DL_YM1__15__20260717.json"
+          ],
+          "bt_winrate": 0.364238,
+          "bt_pf": 0.530604,
+          "notes": "RTH preset on delayed _DL feeds (ES1!/NQ1!/YM1! resolve to CME_MINI_DL/CBOT_MINI_DL; no realtime futures license). 5m history ~3.4 months -> n<100 (45-49 trades, insufficient_data). All three 15m runs sufficient (n=150-151) and all fail: PF 0.40-0.65 far below 1.3 threshold. Sizing overridden once (recorded): fixed 1 contract instead of 10% equity because contract notional > allocation made every entry size to 0. Majority (3/3 sufficient symbols) fail -> rejected.",
+          "updated": "2026-07-17"
         },
         "stocks_us": {
           "status": "candidate",

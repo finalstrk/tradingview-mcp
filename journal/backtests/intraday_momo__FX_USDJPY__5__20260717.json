@@ -1,0 +1,30 @@
+{
+  "setup": "intraday_momo",
+  "symbol": "FX:USDJPY",
+  "market": "fx",
+  "tf": "5",
+  "date": "2026-07-17",
+  "period": {
+    "from": "2026-04-13T19:25:00.000Z",
+    "to": "2026-07-17T13:45:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "NY",
+    "slAtrMult": 1.5,
+    "tp1AtrMult": 1.0,
+    "sizing": "percent_of_equity_10",
+    "commission_pct": 0.005,
+    "slippage_ticks": 2
+  },
+  "trades": 85,
+  "winrate": 0.317647,
+  "winrate_pct": 31.76,
+  "pf": 0.363936,
+  "max_dd_pct": 0.05,
+  "net_profit_pct": -0.05,
+  "avg_trade": -6.201949,
+  "currency": "JPY",
+  "verdict": "insufficient_data",
+  "criteria": "n<100",
+  "notes": "NY session preset. Declared strategy sizing (percent_of_equity 10%) used as-is. Tester history depth: 15m ~10.5 months, 5m ~3.2 months; 5m trade counts fall below n>=100."
+}

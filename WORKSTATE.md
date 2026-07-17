@@ -2,7 +2,27 @@
 
 Last updated: 2026-07-17
 
-## Scalping evidence research + 4 candidate setups (2026-07-17) — IN PROGRESS
+## Scalping evidence research + 4 candidate setups (2026-07-17) — VERIFICATION ROUND 1 DONE
+
+- setup-verify 実施結果（2026-07-17 夜）:
+  - `torb` / futures: **insufficient_data**。アカウントが先物リアルタイム未契約で
+    `*_DL` 遅延フィードへ強制解決、1分足履歴 ~300本かつ全て RTH 時間外で評価不能。
+    証跡3本 + registry 更新済み（戦略品質の判定ではない）。
+  - `intraday_momo` / futures・fx: **両市場 rejected**。15分足で全銘柄 n>=145 の十分
+    サンプル、PF 0.19-0.65 / WR 26-42% で基準（WR45+PF1.3 or WR35+PF1.6）に遠く届かず。
+    証跡14本 + registry 更新済み。文献警告（通貨変種最弱・SPY変種減衰）と整合。
+    先物は口座 percent_of_equity 10% では1枚も建たないため futures のみ fixed 1
+    contract に変更（唯一の調整、証跡・notes 記録済み）。
+  - adopted は引き続き 0件。noise_break / vwap_rsi_pullback は未検証（candidate のまま）。
+- 未コミット: momo 証跡14本 + registry + 本 WORKSTATE。ワークツリー3本
+  （ツールバグ修正の並行セッション）稼働中は `.git/config.worktree` 権限で
+  当セッションの git が使用不能。ワークツリー掃除後にコミット予定。
+- MCPツールバグ3件は別タスク起票済み（pine editor 二重Monacoノード /
+  chart系 "evaluate is not defined" / batch_run の _DL リダイレクト）。
+  momo 実走で判明した追加知見: `ui_open_panel` が pine-editor を silently no-op
+  するケースあり（`pine-dialog-button` クリックで回避）。
+
+## (前段) Scalping evidence research 実装記録 (2026-07-17)
 
 - 100体の Codex (gpt-5.6-sol, effort high, read-only sandbox, web search) 調査
   ワークフロー実施（85/100成功）。10ファミリー統合 → `docs/research/scalping-20260717/`
@@ -380,6 +400,7 @@ Last updated: 2026-07-17
 - 2026-07-08: Launched TradingView Desktop with `HOME=/home/yukio` and CDP port 9222, then repaired current Linux/TradingView-build E2E drift: Linux binary path detection, visible-range assertion, bottom widget close fallback, and replay-stop cleanup.
 - 2026-07-08: Ran targeted E2E for `tv_launch|chart_set_visible_range|ui_open_panel|replay_stop`; 4/4 passed.
 - 2026-07-08: Ran full `npm run test`; 95/95 tests passed.
+- 2026-07-17: Fixed `batch_run` for delayed-data futures redirects: `chartStateMatches` now accepts an observed `_DL` exchange variant of the requested symbol (one-directional, `src/wait.js` `isDelayedSymbolVariant`), success rows record `resolved_symbol` / `symbol_redirected`, and `get_strategy_results` retries once on `STRATEGY_FINGERPRINT_UNSTABLE` (`src/core/batch.js`). Added 5 regression tests; `tests/wait.test.js` + `tests/batch.test.js` 59/59 passed and `npm test` offline checks (unit, manifest) passed with live E2E safe-stopped as designed.
 
 ## Blockers
 

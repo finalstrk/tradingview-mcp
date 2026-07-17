@@ -1,0 +1,30 @@
+{
+  "setup": "intraday_momo",
+  "symbol": "FX:AUDUSD",
+  "market": "fx",
+  "tf": "15",
+  "date": "2026-07-17",
+  "period": {
+    "from": "2025-09-01T19:15:00.000Z",
+    "to": "2026-07-17T13:45:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "NY",
+    "slAtrMult": 1.5,
+    "tp1AtrMult": 1.0,
+    "sizing": "percent_of_equity_10",
+    "commission_pct": 0.005,
+    "slippage_ticks": 2
+  },
+  "trades": 151,
+  "winrate": 0.264901,
+  "winrate_pct": 26.49,
+  "pf": 0.188187,
+  "max_dd_pct": 0.38,
+  "net_profit_pct": -0.38,
+  "avg_trade": -25.26596,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "wr>=45&pf>=1.3 | wr>=35&pf>=1.6; maxDD<=15",
+  "notes": "NY session preset. Declared strategy sizing (percent_of_equity 10%) used as-is. Tester history depth: 15m ~10.5 months, 5m ~3.2 months; 5m trade counts fall below n>=100."
+}
