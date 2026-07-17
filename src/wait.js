@@ -80,6 +80,23 @@ function normalizeObservedState(value) {
   };
 }
 
+// TradingView silently redirects symbols to a delayed-data exchange variant
+// (e.g. CME_MINI:ES1! -> CME_MINI_DL:ES1!) when the account lacks a real-time
+// license for that market. The redirected chart is the same instrument, so the
+// observed _DL variant is treated as authoritative for the requested symbol.
+// Only the requested->_DL direction is accepted; a real-time observation never
+// satisfies an explicit _DL request.
+export function isDelayedSymbolVariant(requestedSymbol, observedSymbol) {
+  const requested = normalizeChartSymbol(requestedSymbol);
+  const observed = normalizeChartSymbol(observedSymbol);
+  if (!requested || !observed || requested === observed) return false;
+  const requestedSeparator = requested.indexOf(':');
+  const observedSeparator = observed.indexOf(':');
+  if (requestedSeparator <= 0 || observedSeparator <= 0) return false;
+  return observed.slice(0, observedSeparator) === `${requested.slice(0, requestedSeparator)}_DL`
+    && observed.slice(observedSeparator + 1) === requested.slice(requestedSeparator + 1);
+}
+
 export function chartStateMatches(state, expectedSymbol = null, expectedTimeframe = null) {
   const observed = normalizeObservedState(state);
   const observedSymbol = normalizeChartSymbol(observed.symbol);
@@ -91,7 +108,8 @@ export function chartStateMatches(state, expectedSymbol = null, expectedTimefram
   // Unknown chart identity is never authoritative, even when a caller omitted
   // one side of the expected state for backward compatibility.
   if (!observedSymbol || !observedTimeframe) return false;
-  if (requestedSymbol && observedSymbol !== requestedSymbol) return false;
+  if (requestedSymbol && observedSymbol !== requestedSymbol
+    && !isDelayedSymbolVariant(requestedSymbol, observedSymbol)) return false;
   if (requestedTimeframe && observedTimeframe !== requestedTimeframe) return false;
   return true;
 }

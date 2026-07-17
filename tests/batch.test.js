@@ -729,6 +729,77 @@ test('strategy mutation rejects stable old-old and waits for changed new-new', a
   assert.equal(result.results[0].strategy_fingerprint, result.results[0].strategy_oracle_fingerprint);
 });
 
+test('a _DL delayed-data redirect is authoritative and recorded as the resolved symbol', async () => {
+  const fixture = createDependencies();
+  const originalSetSymbol = fixture.dependencies.setSymbol;
+  fixture.dependencies.setSymbol = async (symbol, context = {}) => {
+    // Simulate TradingView silently redirecting a futures symbol to its
+    // delayed-data variant when the account lacks a real-time license.
+    const resolved = symbol.startsWith('CME_MINI:') ? symbol.replace('CME_MINI:', 'CME_MINI_DL:') : symbol;
+    return originalSetSymbol(resolved, context);
+  };
+
+  const result = await batchRun({
+    ...defaultRequest,
+    symbols: ['CME_MINI:ES1!'],
+    timeframes: ['5'],
+    _deps: fixture.dependencies,
+  });
+
+  assert.equal(result.success, true);
+  const row = result.results[0];
+  assert.equal(row.success, true);
+  assert.equal(row.requested.symbol, 'CME_MINI:ES1!');
+  assert.equal(row.resolved_symbol, 'CME_MINI_DL:ES1!');
+  assert.equal(row.symbol_redirected, true);
+  assert.equal(row.observed.symbol, 'CME_MINI_DL:ES1!');
+  assert.equal(result.restoration.success, true);
+});
+
+test('rows without a redirect record the requested symbol as resolved', async () => {
+  const fixture = createDependencies();
+  const result = await batchRun({
+    ...defaultRequest,
+    symbols: ['FX:USDJPY'],
+    timeframes: ['5'],
+    _deps: fixture.dependencies,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.results[0].resolved_symbol, 'FX:USDJPY');
+  assert.equal(result.results[0].symbol_redirected, false);
+});
+
+test('strategy fingerprint instability is retried once before failing the row', async () => {
+  const snapshots = [
+    { success: true, metrics: { net_profit: 1 }, source: 'fixture' },
+    { success: true, metrics: { net_profit: 2 }, source: 'fixture' },
+    { success: true, metrics: { net_profit: 3 }, source: 'fixture' },
+    { success: true, metrics: { net_profit: 3 }, source: 'fixture' },
+  ];
+  let strategyCalls = 0;
+  const fixture = createDependencies({
+    executeAction: undefined,
+    // With now advancing by 1 per call, a 5-tick deadline yields exactly two
+    // strategy snapshots per stability attempt.
+    readinessTimeoutMs: 5,
+    getStrategyResults: async () => snapshots[Math.min(strategyCalls++, snapshots.length - 1)],
+  });
+  delete fixture.dependencies.executeAction;
+
+  const result = await batchRun({
+    ...defaultRequest,
+    symbols: ['FX:INITIAL'],
+    timeframes: ['1D'],
+    action: 'get_strategy_results',
+    _deps: fixture.dependencies,
+  });
+
+  assert.equal(strategyCalls, 4, 'one unstable attempt plus one stable retry');
+  assert.equal(result.success, true);
+  assert.equal(result.results[0].result.metrics.net_profit, 3);
+});
+
 test('duplicate symbols preserve the exact input product without duplicate group execution', async () => {
   const fixture = createDependencies();
   const result = await batchRun({

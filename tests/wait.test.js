@@ -39,6 +39,35 @@ test('normalizes authoritative symbol and timeframe values without accepting emp
   assert.equal(chartStateMatches(state('FX:EURUSD', '5'), 'FX:EURUSD', '15'), false);
 });
 
+test('a delayed-data (_DL) exchange variant of the requested symbol is authoritative', () => {
+  assert.equal(chartStateMatches(state('CME_MINI_DL:ES1!', '5'), 'CME_MINI:ES1!', '5'), true);
+  assert.equal(chartStateMatches(state('cme_mini_dl:es1!', '5'), 'CME_MINI:ES1!', '5'), true);
+  // Direction matters: a real-time observation never satisfies a _DL request.
+  assert.equal(chartStateMatches(state('CME_MINI:ES1!', '5'), 'CME_MINI_DL:ES1!', '5'), false);
+  // Different exchange or ticker is still a mismatch.
+  assert.equal(chartStateMatches(state('CBOT_DL:ES1!', '5'), 'CME_MINI:ES1!', '5'), false);
+  assert.equal(chartStateMatches(state('CME_MINI_DL:NQ1!', '5'), 'CME_MINI:ES1!', '5'), false);
+  // Symbols without an exchange prefix never match a prefixed variant.
+  assert.equal(chartStateMatches(state('CME_MINI_DL:ES1!', '5'), 'ES1!', '5'), false);
+});
+
+test('waitForChartReady accepts a stable _DL redirect of the requested symbol', async () => {
+  const redirected = state('CME_MINI_DL:ES1!', '15', 200);
+  const clock = fakeClock();
+  let calls = 0;
+
+  const observed = await waitForChartReady('CME_MINI:ES1!', '15', 100, {
+    evaluate: async () => { calls += 1; return redirected; },
+    now: clock.now,
+    sleep: clock.sleep,
+    pollIntervalMs: 5,
+    stableChecks: 2,
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(observed.symbol, 'CME_MINI_DL:ES1!');
+});
+
 test('readChartState uses only the authoritative chart API, not DOM heuristics', async () => {
   let expression;
   const observed = await readChartState({

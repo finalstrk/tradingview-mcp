@@ -312,7 +312,15 @@ async function executeDefaultAction(context) {
     };
   }
   if (context.action === 'get_strategy_results') {
-    return getStableStrategyResult(context);
+    try {
+      return await getStableStrategyResult(context);
+    } catch (error) {
+      // Strategy recalculation can straddle the first stability window on live
+      // data; one fresh attempt absorbs that transient without masking a chart
+      // mismatch or a persistent instability.
+      if (error?.code !== 'STRATEGY_FINGERPRINT_UNSTABLE' || context.signal?.aborted) throw error;
+      return getStableStrategyResult(context);
+    }
   }
   throw new BatchError('BATCH_UNKNOWN_ACTION', `Unknown batch action: ${context.action}`);
 }
@@ -748,11 +756,14 @@ export async function batchRun({
         );
       }
 
+      const resolvedSymbol = normalizeChartSymbol(observed?.symbol) || requested.symbol;
       results.push({
         symbol: item.symbol,
         timeframe: item.timeframe,
         requested,
         observed: observedState(observed),
+        resolved_symbol: resolvedSymbol,
+        symbol_redirected: resolvedSymbol !== requested.symbol,
         success: true,
         action_started: true,
         duration_ms: Math.max(0, deps.now() - startedAt),
