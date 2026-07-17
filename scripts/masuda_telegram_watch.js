@@ -43,6 +43,14 @@ function firedKey(value) {
   return value === null || value === undefined || value === '' ? null : String(value);
 }
 
+function comparableFireTime(value) {
+  if (value === null) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function selectNewEvents(alerts, previousState = {}, { prime = false } = {}) {
   const seen = { ...(previousState.alerts || {}) };
   const events = [];
@@ -54,10 +62,15 @@ export function selectNewEvents(alerts, previousState = {}, { prime = false } = 
     const fired = firedKey(alert.last_fired);
     const previous = firedKey(seen[id]);
 
-    if (!prime && fired !== null && fired !== previous) {
+    const firedTime = comparableFireTime(fired);
+    const previousTime = comparableFireTime(previous);
+    const isFirstFire = fired !== null && previous === null;
+    const isNewerFire = firedTime !== null && previousTime !== null && firedTime > previousTime;
+
+    if (!prime && (isFirstFire || isNewerFire)) {
       events.push({ alert, event });
     }
-    seen[id] = fired;
+    if (isFirstFire || isNewerFire) seen[id] = fired;
   }
 
   return {

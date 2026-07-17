@@ -49,6 +49,13 @@ describe('masuda telegram watcher — event contract', () => {
     const next = selectNewEvents([alert({ last_fired: 1_784_265_900 })], first.state);
     assert.equal(next.events.length, 1);
 
+    const regressed = selectNewEvents(
+      [alert({ last_fired: 1_784_265_500 })],
+      { alerts: { 42: '1784265600' } }
+    );
+    assert.equal(regressed.events.length, 0);
+    assert.equal(regressed.state.alerts['42'], '1784265600');
+
     const primed = selectNewEvents([alert()], { alerts: {} }, { prime: true });
     assert.equal(primed.events.length, 0);
     assert.equal(primed.state.alerts['42'], '1784265600');
