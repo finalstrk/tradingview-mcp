@@ -1,6 +1,6 @@
 # WORKSTATE
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 ## DT Pair-Trader layer (2026-07-15) — BUILT, unverified live
 
@@ -83,6 +83,14 @@ Last updated: 2026-07-16
     full manifest は 11/12 で、残る1件は managed sandbox が nested
     `/home/yukio/.hermes/node/bin/node` を `spawnSync ... EPERM` で拒否した既知の環境 residual。
     live TradingView / Claude、journal append、commit、push は未実施。
+- Pre-push review repair lane（2026-07-17）— OFFLINE PASS、live-ready ではない:
+  - MASUDA shadow watcher は `last_fired` の単なる不一致ではなく単調増加だけを新規通知とし、
+    timestamp 回帰時は通知せず保存済みstateも巻き戻さない。
+  - interactive direct mode の `next check` / chart-context change も、次cycleまたはchart操作の
+    前に fresh `mcp__tradingview__tv_health_check` を必須化。
+  - RED→GREEN focused tests 14/14 PASS。独立Claude reviewは
+    `Clean. Pushable development; not live-ready.`。子agent Bashのcommand-level強制不足、
+    live TradingView/CDP、journal append、companion実走は既知residualのまま。
 - スモーク検証（2026-07-15、commit ca1b88f 後）:
   - market-watcher: MCP 未接続環境で fail-path PASS（テンプレート遵守・データ捏造
     なし・MTF 全 unknown 報告）。
