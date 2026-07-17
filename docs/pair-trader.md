@@ -214,6 +214,10 @@ chart/registry call, worker, screenshot, journal write, or extra cycle. A bounde
 summary without health/tool/worker output. A direct human `/pair-session`
 invocation may still offer interactive Loop Control.
 
+Every interactive `next check` and chart-context change also starts with a fresh
+`mcp__tradingview__tv_health_check`. A failed health check stops before chart,
+registry, worker, or next-cycle operations.
+
 Every bounded final response is one raw JSON object only, with no prose, heading,
 markdown fence, alias, or extra field. Its exact keys are `action`, `cycle_id`,
 `cycle_seq`, `status`, `cycle_completed`, `health`, `snapshot_status`,

@@ -197,6 +197,25 @@ describe('Pair-Trader contract closure', () => {
     assert.match(docs, /verified=true[\s\S]*expected id[\s\S]*shape[\s\S]*exact object[\s\S]*status=completed/i);
   });
 
+  it('runs a fresh health gate before every interactive next cycle or chart-context change', () => {
+    const loop = markdownSection(command, 'Loop Control');
+    const nextStart = loop.indexOf('If the user chooses next check:');
+    const changeStart = loop.indexOf('If the user chooses change symbol:');
+    const endStart = loop.indexOf('If the user chooses end:');
+    const nextBlock = loop.slice(nextStart, changeStart);
+    const changeBlock = loop.slice(changeStart, endStart);
+
+    const nextHealth = nextBlock.indexOf('mcp__tradingview__tv_health_check');
+    assert.ok(nextHealth >= 0, 'interactive next check must include a fresh health gate');
+    assert.ok(nextHealth < nextBlock.indexOf('Run another watch cycle'));
+    assert.match(nextBlock, /If health fails[\s\S]*do not run another watch cycle/i);
+
+    const changeHealth = changeBlock.indexOf('mcp__tradingview__tv_health_check');
+    assert.ok(changeHealth >= 0, 'interactive chart change must include a fresh health gate');
+    assert.ok(changeHealth < changeBlock.indexOf('chart_set_symbol'));
+    assert.match(changeBlock, /If health fails[\s\S]*do not change the chart context/i);
+  });
+
   it('documents capability semantics and pins read-only companion invocation', () => {
     assert.match(docs, /plugin `--tools`[\s\S]*limits built-in tools/i);
     assert.match(docs, /verified agent frontmatter[\s\S]*exact MCP and subagent capability boundary/i);

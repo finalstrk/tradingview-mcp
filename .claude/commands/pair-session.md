@@ -415,10 +415,16 @@ After every interactive watch cycle, ask the user to choose:
 - end
 
 If the user chooses next check:
+- Call `mcp__tradingview__tv_health_check` as the next tool call before any chart,
+  registry, or worker operation.
+- If health fails, stop and do not run another watch cycle.
 - Run another watch cycle.
 
 If the user chooses change symbol:
 - Ask for the new symbol and optional timeframe.
+- Call `mcp__tradingview__tv_health_check` as the next tool call before any chart,
+  registry, or worker operation.
+- If health fails, stop and do not change the chart context.
 - Call `chart_set_symbol`.
 - Call `chart_set_timeframe` only if a timeframe is supplied.
 - Call `chart_get_state` exactly once for the new chart context.
