@@ -1,0 +1,81 @@
+//@version=6
+indicator("増田式 Daily Watchlist v1", overlay=false)
+
+// Pine Screener-compatible daily implementation. No MTF requests or order logic.
+string groupBB = "① ボリンジャーバンド"
+int bbLength = input.int(20, "期間", minval=1, group=groupBB)
+float bbMult = input.float(2.0, "σ倍率", minval=0.1, step=0.1, group=groupBB)
+
+string groupRSI = "② RSI"
+int rsiLength = input.int(14, "期間", minval=1, group=groupRSI)
+int rsiBuyThreshold = input.int(25, "買い閾値 (以下)", minval=0, maxval=100, group=groupRSI)
+int rsiSellThreshold = input.int(75, "売り閾値 (以上)", minval=0, maxval=100, group=groupRSI)
+
+string groupADX = "③ ADX"
+int adxLength = input.int(14, "DI期間", minval=1, group=groupADX)
+int adxSmoothing = input.int(1, "ADX平滑化", minval=1, group=groupADX)
+int adxThreshold = input.int(60, "閾値 (以上)", minval=0, maxval=100, group=groupADX)
+
+string groupMACD = "④ MACD"
+int macdFast = input.int(12, "短期EMA", minval=1, group=groupMACD)
+int macdSlow = input.int(26, "長期EMA", minval=1, group=groupMACD)
+int macdSignalLength = input.int(9, "シグナル期間", minval=1, group=groupMACD)
+
+string groupStoch = "⑤ ストキャスティクス"
+int stochKLength = input.int(15, "%K期間", minval=1, group=groupStoch)
+int stochKSmooth = input.int(9, "%K平滑化", minval=1, group=groupStoch)
+int stochDSmooth = input.int(3, "%D平滑化", minval=1, group=groupStoch)
+
+string groupSignal = "⑥ シグナル"
+int minConditions = input.int(2, "必要条件数 (RSI/ADX/MACDから)", minval=1, maxval=3, group=groupSignal)
+
+// Indicator calculations use the Screener-selected timeframe. Operate on 1D only.
+float bbBasis = ta.sma(close, bbLength)
+float bbDeviation = bbMult * ta.stdev(close, bbLength)
+float bbUpper = bbBasis + bbDeviation
+float bbLower = bbBasis - bbDeviation
+float rsiValue = ta.rsi(close, rsiLength)
+[diPlus, diMinus, adxValue] = ta.dmi(adxLength, adxSmoothing)
+[macdLine, macdSignal, macdHistogram] = ta.macd(close, macdFast, macdSlow, macdSignalLength)
+float stochK = ta.sma(ta.stoch(close, high, low, stochKLength), stochKSmooth)
+float stochD = ta.sma(stochK, stochDSmooth)
+
+// Original 増田式 component conditions.
+bool bbBuyCondition = close < bbLower
+bool bbSellCondition = close > bbUpper
+bool rsiBuyCondition = rsiValue <= rsiBuyThreshold
+bool rsiSellCondition = rsiValue >= rsiSellThreshold
+bool adxCondition = adxValue >= adxThreshold
+bool macdBuyCondition = macdHistogram[1] < macdHistogram[2] and macdHistogram[1] < macdHistogram and macdLine[1] < 0
+bool macdSellCondition = macdHistogram[1] > macdHistogram[2] and macdHistogram[1] > macdHistogram and macdLine[1] > 0
+bool stochGoldenCross = ta.crossover(stochK, stochD)
+bool stochDeadCross = ta.crossunder(stochK, stochD)
+
+int buyCount = (rsiBuyCondition ? 1 : 0) + (adxCondition ? 1 : 0) + (macdBuyCondition ? 1 : 0)
+int sellCount = (rsiSellCondition ? 1 : 0) + (adxCondition ? 1 : 0) + (macdSellCondition ? 1 : 0)
+bool compositeBuyState = bbBuyCondition and buyCount >= minConditions
+bool compositeSellState = bbSellCondition and sellCount >= minConditions
+bool stochBuyEvent = adxCondition and stochGoldenCross
+bool stochSellEvent = adxCondition and stochDeadCross
+
+bool dailyReady = timeframe.isdaily and barstate.isconfirmed
+bool longTrigger = dailyReady and ((compositeBuyState and not compositeBuyState[1]) or stochBuyEvent)
+bool shortTrigger = dailyReady and ((compositeSellState and not compositeSellState[1]) or stochSellEvent)
+int compositeState = compositeBuyState ? 1 : compositeSellState ? -1 : 0
+int barDayUtc = int(math.floor(time_close / 86400000))
+
+// Pine Screener exposes the first ten plots as columns/filter inputs.
+plot(longTrigger ? 1 : 0, "Long Trigger", color=color.new(color.green, 0))
+plot(shortTrigger ? 1 : 0, "Short Trigger", color=color.new(color.red, 0))
+plot(compositeState, "Composite State", color=compositeState > 0 ? color.new(color.green, 40) : color.new(color.red, 40))
+plot(buyCount, "Buy Conditions", color=color.new(color.teal, 0))
+plot(sellCount, "Sell Conditions", color=color.new(color.orange, 0))
+plot(adxValue, "ADX", color=color.new(color.purple, 0))
+plot(rsiValue, "RSI", color=color.new(color.blue, 0))
+plot(stochK, "Stoch %K", color=color.new(color.green, 0))
+plot(stochD, "Stoch %D", color=color.new(color.red, 0))
+plot(barDayUtc, "Bar Day UTC", color=color.new(color.gray, 100))
+
+// Keep exactly two alert conditions so both are exposed by Pine Screener.
+alertcondition(longTrigger, "MASUDA Daily Long", "MASUDA_DAILY|v=1|setup=masuda_daily|dir=long|state=triggered|ticker={{ticker}}|tf={{interval}}|close={{close}}")
+alertcondition(shortTrigger, "MASUDA Daily Short", "MASUDA_DAILY|v=1|setup=masuda_daily|dir=short|state=triggered|ticker={{ticker}}|tf={{interval}}|close={{close}}")
