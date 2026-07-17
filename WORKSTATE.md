@@ -1,6 +1,14 @@
 # WORKSTATE
 
-Last updated: 2026-07-08
+Last updated: 2026-07-17
+
+## Bug fix: pine_* Monaco selector (2026-07-17)
+
+- 原因: ページ内に `.monaco-editor.pine-editor-monaco` が2ノード（隠し0x0テンプレート + 実エディタ）存在し、`querySelector` がテンプレートを掴んで "Monaco not found in React fiber tree" になっていた。
+- 修正: `src/core/monaco.js` 新設。`querySelectorAll` で全候補を可視優先で走査（`FIND_MONACO` / `FIND_VISIBLE_PINE_MONACO`）。`pine.js` / `ui.js:44` / `health.js` uiState の3箇所を置換。
+- 回帰テスト: `tests/monaco_finder.test.js`（7件、npm scripts 登録済み）。
+- 既知の別残課題: `pine_analyze.test.js` の server compile 系3件と `cli.test.js` の2件は修正前から失敗（TradingView compile API 依存）。今回の変更とは無関係。
+- 未検証: 実機 TradingView での E2E。sandbox が socket() を遮断するため本セッションでは TradingView 自体が起動不能（process_singleton_posix.cc で FATAL）。検証用スクリプトは scratchpad の `e2e_monaco_check.mjs`（worktree コードで CDP に直接接続し、候補ノード数・新旧セレクタの選択結果・pine_get_errors 到達を確認する内容）。TradingView 起動済みの通常環境で `node <script>` を実行すれば MCP サーバー再起動なしで検証可能。
 
 ## Side project: quant-github-atlas (2026-07-07) — COMPLETED
 
