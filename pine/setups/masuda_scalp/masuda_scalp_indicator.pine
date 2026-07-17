@@ -1,0 +1,396 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Based on Bollinger Band + DMI + RSI + MACD trading methodology
+
+//@version=6
+indicator("増田式 Scalp Alerts v1", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ============================================================================
+// INPUT PARAMETERS
+// ============================================================================
+
+// --- Multi-Timeframe ---
+grpMTF = "⓪ マルチタイムフレーム"
+useMTF = input.bool(false, "MTFを有効化", group=grpMTF, tooltip="有効にすると選択した時間足のデータを使用")
+mtfTimeframe = input.timeframe("60", "時間足", group=grpMTF, options=["1", "3", "5", "15", "30", "60", "120", "240", "D", "W", "M"])
+waitForConfirm = input.bool(true, "時間足の確定を待つ", group=grpMTF, tooltip="オフにするとリアルタイムで更新（リペイントする可能性あり）")
+
+// --- Bollinger Bands ---
+grpBB = "① ボリンジャーバンド"
+bbLength = input.int(20, "期間", minval=1, group=grpBB)
+bbMult = input.float(2.0, "σ倍率", minval=0.1, step=0.1, group=grpBB)
+
+// --- RSI ---
+grpRSI = "② RSI"
+rsiLength = input.int(14, "期間", minval=1, group=grpRSI)
+rsiBuyThreshold = input.int(25, "買い閾値 (以下)", minval=0, maxval=100, group=grpRSI)
+rsiSellThreshold = input.int(75, "売り閾値 (以上)", minval=0, maxval=100, group=grpRSI)
+
+// --- ADX ---
+grpADX = "③ ADX (DMI) ★重要"
+adiLength = input.int(14, "ADI期間", minval=1, group=grpADX)
+adxSmoothing = input.int(1, "ADX平滑化", minval=1, group=grpADX)
+adxThreshold = input.int(60, "閾値 (以上)", minval=0, maxval=100, group=grpADX)
+
+// --- Stochastic ---
+grpStoch = "⑤ ストキャスティクス"
+stochKLength = input.int(15, "%K期間", minval=1, group=grpStoch)
+stochKSmooth = input.int(9, "%K平滑化", minval=1, group=grpStoch)
+stochDSmooth = input.int(3, "%D平滑化", minval=1, group=grpStoch)
+
+// --- MACD ---
+grpMACD = "④ MACD"
+macdFast = input.int(12, "短期EMA", minval=1, group=grpMACD)
+macdSlow = input.int(26, "長期EMA", minval=1, group=grpMACD)
+macdSignal = input.int(9, "シグナル期間", minval=1, group=grpMACD)
+
+// --- ZigZag Swing Points (MTF) ---
+grpSwing = "⑥ ZigZag スイングポイント"
+showSwing = input.bool(true, "スイングポイントを表示", group=grpSwing)
+swingTimeframe = input.timeframe("60", "時間足", group=grpSwing, options=["15", "30", "60", "120", "240", "D"])
+swingPivotLen = input.int(5, "ピボット期間 (左右)", minval=2, maxval=50, group=grpSwing, tooltip="ピボット判定のバー数。1H足で5=前後5時間")
+swingShowLabels = input.bool(true, "ラベルを表示", group=grpSwing)
+swingShowZZLines = input.bool(true, "ZigZagラインを表示", group=grpSwing)
+swingShowHLines = input.bool(true, "水平線を表示", group=grpSwing)
+swingHLineLength = input.int(50, "水平線の長さ（バー）", minval=10, maxval=200, group=grpSwing)
+swingHighColor = input.color(color.red, "高値の色 (HH/LH)", group=grpSwing)
+swingLowColor = input.color(color.green, "安値の色 (HL/LL)", group=grpSwing)
+
+// --- Signal Logic ---
+grpSignal = "シグナル設定"
+minConditions = input.int(2, "必要条件数 (RSI/ADX/MACDから)", minval=1, maxval=3, group=grpSignal, tooltip="BB条件は必須。これに加えてRSI/ADX/MACDから何個必要か")
+confirmedAlertsOnly = input.bool(true, "アラートはバー確定時のみ", group=grpSignal, tooltip="オンを推奨。オフでは形成中バーで通知し、条件が消える可能性あり")
+emitFormingAlerts = input.bool(false, "forming予告を有効化", group=grpSignal, tooltip="BB必須かつ補助条件があと1つの時だけ予告")
+
+// --- Display ---
+grpDisplay = "表示設定"
+showBB = input.bool(true, "ボリンジャーバンドを表示", group=grpDisplay)
+showTable = input.bool(true, "条件テーブルを表示", group=grpDisplay)
+showLabels = input.bool(true, "シグナルラベルを表示", group=grpDisplay)
+signalSize = input.string("large", "シグナルサイズ", options=["small", "normal", "large", "huge"], group=grpDisplay)
+
+// ============================================================================
+// HELPER FUNCTION: Get Signal Size
+// ============================================================================
+
+getSigSize(sizeStr) =>
+    switch sizeStr
+        "small" => size.small
+        "normal" => size.normal
+        "large" => size.large
+        "huge" => size.huge
+        => size.large
+
+sigSize = getSigSize(signalSize)
+
+// ============================================================================
+// MTF DATA FETCH
+// ============================================================================
+
+tf = useMTF ? mtfTimeframe : timeframe.period
+gapSetting = waitForConfirm ? barmerge.gaps_on : barmerge.gaps_off
+
+mtfClose = request.security(syminfo.tickerid, tf, close, gaps=gapSetting, lookahead=barmerge.lookahead_off)
+
+// ============================================================================
+// INDICATOR CALCULATIONS (MTF対応)
+// ============================================================================
+
+// --- Bollinger Bands ---
+calcBB(src, len, mult) =>
+    basis = ta.sma(src, len)
+    dev = mult * ta.stdev(src, len)
+    [basis, basis + dev, basis - dev]
+
+[bbBasis_raw, bbUpper_raw, bbLower_raw] = calcBB(close, bbLength, bbMult)
+[mtfBbBasis, mtfBbUpper, mtfBbLower] = request.security(syminfo.tickerid, tf, calcBB(close, bbLength, bbMult), gaps=gapSetting, lookahead=barmerge.lookahead_off)
+
+bbBasis = useMTF ? mtfBbBasis : bbBasis_raw
+bbUpper = useMTF ? mtfBbUpper : bbUpper_raw
+bbLower = useMTF ? mtfBbLower : bbLower_raw
+
+// --- RSI ---
+rsiValue_raw = ta.rsi(close, rsiLength)
+mtfRsi = request.security(syminfo.tickerid, tf, ta.rsi(close, rsiLength), gaps=gapSetting, lookahead=barmerge.lookahead_off)
+rsiValue = useMTF ? mtfRsi : rsiValue_raw
+
+// --- ADX (DMI) ---
+calcDMI(adiLen, adxSmooth) =>
+    [dp, dm, adx] = ta.dmi(adiLen, adxSmooth)
+    [dp, dm, adx]
+
+[diPlus_raw, diMinus_raw, adxValue_raw] = calcDMI(adiLength, adxSmoothing)
+[mtfDiPlus, mtfDiMinus, mtfAdx] = request.security(syminfo.tickerid, tf, calcDMI(adiLength, adxSmoothing), gaps=gapSetting, lookahead=barmerge.lookahead_off)
+
+diPlus = useMTF ? mtfDiPlus : diPlus_raw
+diMinus = useMTF ? mtfDiMinus : diMinus_raw
+adxValue = useMTF ? mtfAdx : adxValue_raw
+
+// --- MACD ---
+calcMACD(fast, slow, sig) =>
+    [macdL, sigL, hist] = ta.macd(close, fast, slow, sig)
+    [macdL, sigL, hist]
+
+[macdLine_raw, signalLine_raw, histLine_raw] = calcMACD(macdFast, macdSlow, macdSignal)
+[mtfMacdLine, mtfSignalLine, mtfHistLine] = request.security(syminfo.tickerid, tf, calcMACD(macdFast, macdSlow, macdSignal), gaps=gapSetting, lookahead=barmerge.lookahead_off)
+
+macdLine = useMTF ? mtfMacdLine : macdLine_raw
+signalLine = useMTF ? mtfSignalLine : signalLine_raw
+histLine = useMTF ? mtfHistLine : histLine_raw
+
+// --- Stochastic ---
+calcStoch(kLen, kSmooth, dSmooth) =>
+    stochK = ta.sma(ta.stoch(close, high, low, kLen), kSmooth)
+    stochD = ta.sma(stochK, dSmooth)
+    [stochK, stochD]
+
+[stochK_raw, stochD_raw] = calcStoch(stochKLength, stochKSmooth, stochDSmooth)
+[mtfStochK, mtfStochD] = request.security(syminfo.tickerid, tf, calcStoch(stochKLength, stochKSmooth, stochDSmooth), gaps=gapSetting, lookahead=barmerge.lookahead_off)
+
+stochK = useMTF ? mtfStochK : stochK_raw
+stochD = useMTF ? mtfStochD : stochD_raw
+
+// ============================================================================
+// ZIGZAG SWING POINT DETECTION (MTF) - Pivot Based
+// ============================================================================
+
+// MTFピボット検出
+swingPH = request.security(syminfo.tickerid, swingTimeframe, ta.pivothigh(high, swingPivotLen, swingPivotLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+swingPL = request.security(syminfo.tickerid, swingTimeframe, ta.pivotlow(low, swingPivotLen, swingPivotLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// 状態管理
+var float lastSwingHigh = na
+var float lastSwingLow = na
+var int lastSwingHighBar = na
+var int lastSwingLowBar = na
+
+// ピボット検出
+pivotHighFound = not na(swingPH)
+pivotLowFound = not na(swingPL)
+
+// ピボットのバー位置（右側確認分だけ遅延）
+pivotBar = bar_index - swingPivotLen
+
+// HH/LH/HL/LL判定と描画
+if showSwing and pivotHighFound
+    // 種別判定
+    swingType = na(lastSwingHigh) ? "HH" : (swingPH > lastSwingHigh ? "HH" : "LH")
+
+    // ZigZagライン（前の安値から今の高値へ）
+    if swingShowZZLines and not na(lastSwingLowBar) and not na(lastSwingLow)
+        line.new(lastSwingLowBar, lastSwingLow, pivotBar, swingPH,
+                 color=swingHighColor, width=2)
+
+    // ラベル
+    if swingShowLabels
+        lblColor = swingType == "HH" ? swingHighColor : color.new(swingHighColor, 40)
+        label.new(pivotBar, swingPH, swingType,
+                  style=label.style_label_down, color=lblColor,
+                  textcolor=color.white, size=size.small)
+
+    // 水平線
+    if swingShowHLines
+        lineColor = swingType == "HH" ? swingHighColor : color.new(swingHighColor, 40)
+        line.new(pivotBar, swingPH, pivotBar + swingHLineLength, swingPH,
+                 color=lineColor,
+                 style=swingType == "HH" ? line.style_solid : line.style_dashed,
+                 width=swingType == "HH" ? 2 : 1)
+
+    // 状態更新
+    lastSwingHigh := swingPH
+    lastSwingHighBar := pivotBar
+
+if showSwing and pivotLowFound
+    // 種別判定
+    swingType = na(lastSwingLow) ? "HL" : (swingPL > lastSwingLow ? "HL" : "LL")
+
+    // ZigZagライン（前の高値から今の安値へ）
+    if swingShowZZLines and not na(lastSwingHighBar) and not na(lastSwingHigh)
+        line.new(lastSwingHighBar, lastSwingHigh, pivotBar, swingPL,
+                 color=swingLowColor, width=2)
+
+    // ラベル
+    if swingShowLabels
+        lblColor = swingType == "HL" ? swingLowColor : color.new(swingLowColor, 40)
+        label.new(pivotBar, swingPL, swingType,
+                  style=label.style_label_up, color=lblColor,
+                  textcolor=color.white, size=size.small)
+
+    // 水平線
+    if swingShowHLines
+        lineColor = swingType == "HL" ? swingLowColor : color.new(swingLowColor, 40)
+        line.new(pivotBar, swingPL, pivotBar + swingHLineLength, swingPL,
+                 color=lineColor,
+                 style=swingType == "HL" ? line.style_solid : line.style_dashed,
+                 width=swingType == "HL" ? 2 : 1)
+
+    // 状態更新
+    lastSwingLow := swingPL
+    lastSwingLowBar := pivotBar
+
+// ============================================================================
+// MACD HISTOGRAM PEAK DETECTION
+// ============================================================================
+
+histPeakDown = histLine[1] < histLine[2] and histLine[1] < histLine[0]
+histPeakUp = histLine[1] > histLine[2] and histLine[1] > histLine[0]
+
+macdInLowZone = macdLine[1] < 0
+macdInHighZone = macdLine[1] > 0
+
+macdBuyCondition = histPeakDown and macdInLowZone
+macdSellCondition = histPeakUp and macdInHighZone
+
+// ============================================================================
+// INDIVIDUAL CONDITIONS
+// ============================================================================
+
+// ① ボリンジャーバンド条件（必須）
+priceForBB = useMTF ? mtfClose : close
+bbBuyCondition = priceForBB < bbLower
+bbSellCondition = priceForBB > bbUpper
+
+// ② RSI条件
+rsiBuyCondition = rsiValue <= rsiBuyThreshold
+rsiSellCondition = rsiValue >= rsiSellThreshold
+
+// ③ ADX条件（トレンド強度確認）★重要 = 前提条件
+adxCondition = adxValue >= adxThreshold
+
+// ⑤ ストキャスティクス クロス検出
+stochGoldenCross = ta.crossover(stochK, stochD)   // %Kが%Dを上抜け = 買い
+stochDeadCross = ta.crossunder(stochK, stochD)    // %Kが%Dを下抜け = 売り
+
+// ④ MACD条件
+// macdBuyCondition, macdSellCondition (上で定義済み)
+
+// ============================================================================
+// SIGNAL GENERATION
+// ============================================================================
+
+// 複合シグナル: BB必須 + 2条件以上
+buyCount = (rsiBuyCondition ? 1 : 0) + (adxCondition ? 1 : 0) + (macdBuyCondition ? 1 : 0)
+sellCount = (rsiSellCondition ? 1 : 0) + (adxCondition ? 1 : 0) + (macdSellCondition ? 1 : 0)
+
+compositeBuySignal = bbBuyCondition and buyCount >= minConditions
+compositeSellSignal = bbSellCondition and sellCount >= minConditions
+
+// Stochシグナル: ADX≥閾値（前提条件）+ ストキャスティクスがクロス
+stochBuySignal = adxCondition and stochGoldenCross   // ADX≥60 + GC = 買い
+stochSellSignal = adxCondition and stochDeadCross    // ADX≥60 + DC = 売り
+
+// 最終シグナル（複合 OR Stoch）
+buySignal = compositeBuySignal or stochBuySignal
+sellSignal = compositeSellSignal or stochSellSignal
+
+// Shadow notification events. These do not place orders or imply live eligibility.
+alertBarReady = not confirmedAlertsOnly or barstate.isconfirmed
+formingBuyCondition = bbBuyCondition and buyCount == math.max(minConditions - 1, 0)
+formingSellCondition = bbSellCondition and sellCount == math.max(minConditions - 1, 0)
+formingBuySignal = emitFormingAlerts and alertBarReady and formingBuyCondition and not formingBuyCondition[1]
+formingSellSignal = emitFormingAlerts and alertBarReady and formingSellCondition and not formingSellCondition[1]
+compositeBuyTriggered = alertBarReady and compositeBuySignal and not compositeBuySignal[1]
+compositeSellTriggered = alertBarReady and compositeSellSignal and not compositeSellSignal[1]
+stochBuyTriggered = alertBarReady and stochBuySignal
+stochSellTriggered = alertBarReady and stochSellSignal
+compositeBuyInvalidated = alertBarReady and compositeBuySignal[1] and not compositeBuySignal
+compositeSellInvalidated = alertBarReady and compositeSellSignal[1] and not compositeSellSignal
+
+// ============================================================================
+// VISUALIZATION - MAIN CHART
+// ============================================================================
+
+// --- Bollinger Bands Plot ---
+pUpper = plot(showBB ? bbUpper : na, "BB上バンド", color=color.new(color.red, 50), linewidth=1)
+pBasis = plot(showBB ? bbBasis : na, "BB中央線", color=color.new(color.gray, 50), linewidth=1)
+pLower = plot(showBB ? bbLower : na, "BB下バンド", color=color.new(color.green, 50), linewidth=1)
+
+fill(pUpper, pLower, color=color.new(color.blue, 93), title="BBフィル")
+
+// --- Stochastic Cross Signals (ALL crosses) ---
+// Stoch GC: 緑の上向き三角
+plotshape(showLabels and stochGoldenCross, "Stoch GC",
+          style=shape.triangleup,
+          location=location.belowbar,
+          color=color.new(#00FF00, 0),
+          size=size.small)
+
+// Stoch DC: 赤の下向き三角
+plotshape(showLabels and stochDeadCross, "Stoch DC",
+          style=shape.triangledown,
+          location=location.abovebar,
+          color=color.new(#FF0000, 0),
+          size=size.small)
+
+
+// --- Background highlight on Stoch cross ---
+bgcolor(stochGoldenCross ? color.new(#00FF00, 92) : na, title="GC背景")
+bgcolor(stochDeadCross ? color.new(#FF0000, 92) : na, title="DC背景")
+
+// ============================================================================
+// DATA WINDOW PLOTS
+// ============================================================================
+
+plot(adxValue, "ADX", color=color.new(color.purple, 100), display=display.data_window)
+plot(adxThreshold, "ADX閾値", color=color.new(color.orange, 100), display=display.data_window)
+plot(rsiValue, "RSI", color=color.new(color.blue, 100), display=display.data_window)
+plot(diPlus, "+DI", color=color.new(color.green, 100), display=display.data_window)
+plot(diMinus, "-DI", color=color.new(color.red, 100), display=display.data_window)
+plot(stochK, "Stoch %K", color=color.new(color.orange, 100), display=display.data_window)
+plot(stochD, "Stoch %D", color=color.new(color.blue, 100), display=display.data_window)
+
+// ============================================================================
+// SIMPLE STATUS TABLE (Stoch Focus)
+// ============================================================================
+
+var table mainTable = na
+
+if showTable
+    if barstate.isfirst
+        mainTable := table.new(position.top_right, 3, 4,
+                               bgcolor=color.new(#1a1a2e, 20),
+                               border_width=1,
+                               border_color=color.new(color.white, 80))
+
+    if barstate.islast
+        // Header
+        mtfLabel = useMTF ? "MTF:" + mtfTimeframe : "現在TF"
+        table.cell(mainTable, 0, 0, mtfLabel, text_color=color.yellow, text_size=size.small)
+        table.cell(mainTable, 1, 0, "", text_size=size.small)
+        table.cell(mainTable, 2, 0, "", text_size=size.small)
+
+        // ADX Status (前提条件)
+        adxBgColor = adxCondition ? color.new(#FFD700, 30) : na
+        table.cell(mainTable, 0, 1, "ADX", text_color=color.white, text_size=size.small)
+        table.cell(mainTable, 1, 1, str.tostring(adxValue, "#.#") + "/" + str.tostring(adxThreshold),
+                   text_color=adxCondition ? color.yellow : color.gray, text_size=size.small, bgcolor=adxBgColor)
+        table.cell(mainTable, 2, 1, adxCondition ? "✓" : "−",
+                   text_color=adxCondition ? color.yellow : color.gray, text_size=size.normal, bgcolor=adxBgColor)
+
+        // Stoch Status
+        stochCrossColor = stochGoldenCross ? color.green : stochDeadCross ? color.red : color.gray
+        table.cell(mainTable, 0, 2, "Stoch", text_color=color.white, text_size=size.small)
+        table.cell(mainTable, 1, 2, "%K:" + str.tostring(stochK, "#.#"),
+                   text_color=stochCrossColor, text_size=size.small)
+        crossText = stochGoldenCross ? "GC" : stochDeadCross ? "DC" : "−"
+        table.cell(mainTable, 2, 2, crossText,
+                   text_color=stochCrossColor, text_size=size.normal,
+                   bgcolor=stochGoldenCross or stochDeadCross ? color.new(stochCrossColor, 60) : na)
+
+        // DI Direction
+        table.cell(mainTable, 0, 3, "DI", text_color=color.gray, text_size=size.tiny)
+        table.cell(mainTable, 1, 3, diPlus > diMinus ? "↑上昇" : "↓下落",
+                   text_color=diPlus > diMinus ? color.green : color.red, text_size=size.tiny)
+        table.cell(mainTable, 2, 3, "", text_size=size.tiny)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+alertcondition(formingBuySignal, title="MASUDA forming long", message="MASUDA|v=1|setup=masuda_scalp|kind=composite|dir=long|state=forming|ticker={{ticker}}|tf={{interval}}|close={{close}}")
+alertcondition(formingSellSignal, title="MASUDA forming short", message="MASUDA|v=1|setup=masuda_scalp|kind=composite|dir=short|state=forming|ticker={{ticker}}|tf={{interval}}|close={{close}}")
+alertcondition(compositeBuyTriggered, title="MASUDA composite long", message="MASUDA|v=1|setup=masuda_scalp|kind=composite|dir=long|state=triggered|ticker={{ticker}}|tf={{interval}}|close={{close}}")
+alertcondition(compositeSellTriggered, title="MASUDA composite short", message="MASUDA|v=1|setup=masuda_scalp|kind=composite|dir=short|state=triggered|ticker={{ticker}}|tf={{interval}}|close={{close}}")
+alertcondition(stochBuyTriggered, title="MASUDA stoch+ADX long", message="MASUDA|v=1|setup=masuda_scalp|kind=stoch_adx|dir=long|state=triggered|ticker={{ticker}}|tf={{interval}}|close={{close}}")
+alertcondition(stochSellTriggered, title="MASUDA stoch+ADX short", message="MASUDA|v=1|setup=masuda_scalp|kind=stoch_adx|dir=short|state=triggered|ticker={{ticker}}|tf={{interval}}|close={{close}}")
+alertcondition(compositeBuyInvalidated, title="MASUDA invalidated long", message="MASUDA|v=1|setup=masuda_scalp|kind=composite|dir=long|state=invalidated|ticker={{ticker}}|tf={{interval}}|close={{close}}")
+alertcondition(compositeSellInvalidated, title="MASUDA invalidated short", message="MASUDA|v=1|setup=masuda_scalp|kind=composite|dir=short|state=invalidated|ticker={{ticker}}|tf={{interval}}|close={{close}}")
