@@ -2,6 +2,7 @@
  * Core UI automation logic.
  */
 import { evaluate, evaluateAsync, getClient } from '../connection.js';
+import { FIND_VISIBLE_PINE_MONACO } from './monaco.js';
 
 export async function click({ by, value }) {
   const escaped = JSON.stringify(value);
@@ -41,7 +42,7 @@ export async function openPanel({ panel, action }) {
         var action = ${JSON.stringify(action)};
         var bottomArea = document.querySelector('[class*="layout__area--bottom"]');
         var isOpen = !!(bottomArea && bottomArea.offsetHeight > 50);
-        if (panel === 'pine-editor') { var monacoEl = document.querySelector('.monaco-editor.pine-editor-monaco'); isOpen = isOpen && !!monacoEl; }
+        if (panel === 'pine-editor') { var monacoEl = ${FIND_VISIBLE_PINE_MONACO}; isOpen = isOpen && !!monacoEl; }
         if (panel === 'strategy-tester') { var stratPanel = document.querySelector('[data-name="backtesting"]') || document.querySelector('[class*="strategyReport"]'); isOpen = isOpen && !!(stratPanel && stratPanel.offsetParent); }
         var performed = 'none';
         if (action === 'open' || (action === 'toggle' && !isOpen)) {

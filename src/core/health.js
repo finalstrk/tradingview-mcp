@@ -2,6 +2,7 @@
  * Core health/discovery/launch logic.
  */
 import { getClient, getTargetInfo, evaluate } from '../connection.js';
+import { FIND_VISIBLE_PINE_MONACO } from './monaco.js';
 import { existsSync } from 'fs';
 import { execSync, spawn } from 'child_process';
 
@@ -96,7 +97,7 @@ export async function uiState() {
       ui.bottom_panel = { open: !!(bottom && bottom.offsetHeight > 50), height: bottom ? bottom.offsetHeight : 0 };
       var right = document.querySelector('[class*="layout__area--right"]');
       ui.right_panel = { open: !!(right && right.offsetWidth > 50), width: right ? right.offsetWidth : 0 };
-      var monacoEl = document.querySelector('.monaco-editor.pine-editor-monaco');
+      var monacoEl = ${FIND_VISIBLE_PINE_MONACO};
       ui.pine_editor = { open: !!monacoEl, width: monacoEl ? monacoEl.offsetWidth : 0, height: monacoEl ? monacoEl.offsetHeight : 0 };
       var stratPanel = document.querySelector('[data-name="backtesting"]') || document.querySelector('[class*="strategyReport"]');
       ui.strategy_tester = { open: !!(stratPanel && stratPanel.offsetParent) };
