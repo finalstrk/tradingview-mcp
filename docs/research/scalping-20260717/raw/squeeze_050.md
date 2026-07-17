@@ -1,0 +1,21 @@
+# Research: Intraday Volatility Clustering
+
+**topic_id**: squeeze_050  
+**family**: squeeze  
+**date**: 2026-07-17  
+**question**: Academic work on intraday volatility clustering that is practically exploitable
+
+---
+
+Volatility clustering predicts the magnitude—not direction—of the next move. The credible tradable evidence therefore combines elevated volatility with momentum/breakout signals. Only three candidates met a reasonable evidence threshold.
+
+1. Market Intraday Momentum — SPY; 30-minute logic. Entry at 15:30 ET: long if the return from yesterday's close to 10:00 is positive, otherwise short. Exit at 16:00; no stop. Trade daily; the edge strengthens in the highest tercile of first-half-hour realized volatility/volume. From February 1993–December 2013, the success rate was 54.37%, annual return 6.67%, Sharpe 1.08; after bid/ask costs in the post-2005 subsample: 6.52%, Sharpe 1.00. Recursive OOS testing began after 1997 and produced OOS \(R^2=1.2\%\). Profit factor and exact day count were not reported. [Peer-reviewed JFE paper and tables](https://jplinvest.dk/wp-content/uploads/2020/12/Intraday-momentum-The-first-half-hour-return-predicts-the-last-half-hour-return.pdf). Grade A. Pine v6: yes—aggregate the opening return and enter/exit on 1–15-minute bars. Risks: post-publication decay, close-auction slippage, and a cost model based mainly on spreads rather than full retail execution. SPY liquidity makes survival after current commissions plausible, but probably at much lower returns.
+
+2. Dynamic Noise-Area Breakout — SPY; 1-minute calculations, decisions at HH:00/HH:30. For each clock minute, calculate the average absolute open-to-current-minute move over the previous 14 sessions. Bounds are  
+upper = max(today's open, prior close) × (1 + average move);  
+lower = min(today's open, prior close) × (1 − average move).  
+At each half-hour, enter long above upper or short below lower. For longs, exit when the next half-hour observation crosses below max(upper, session VWAP); reverse symmetrically for shorts; flatten at 16:00. Dynamic sizing targets 2% daily volatility, capped at 4× leverage. May 2007–April 2024: 1,985% total return, 19.6% CAGR, Sharpe 1.33, 43% hit rate, 25% maximum drawdown, approximately 2,620 traded days; PF unreported. Costs were $0.0035/share commission plus $0.001/share slippage, the latter benchmarked against over 1,000 live executions. No genuine holdout OOS period. [Paper](https://concretumgroup.com/wp-content/uploads/2026/02/Beat-the-Market.pdf), [published code methodology](https://concretumgroup.com/backtesting-riding-intraday-trends-in-us-markets-using-matlab/). Grade B: reproducible code, but proprietary/full historical data and iterative model construction. Pine: yes on 1-minute; partial on 5–15-minute because minute-specific boundaries and fills are lost. Retail-cost survival is plausible in SPY, but the lack of untouched OOS evidence makes the headline return untrustworthy.
+
+3. Stocks-in-Play 5-minute ORB — U.S. equities. Filters: price >$5, prior-14-day average volume ≥1 million, daily ATR(14)>$0.50, first-five-minute relative volume ≥100%, then select the day's top 20 by relative volume. If the first candle is bullish, buy-stop its high; if bearish, sell-stop its low; doji means no trade. Stop = 10% of daily ATR from entry; otherwise exit at 16:00. Risk 1% per trade, maximum 4× leverage. Survivorship-free CRSP/IQFeed universe of >7,000 stocks, 2016–2023: net return 1,637%, CAGR 41.6%, Sharpe 2.81, win rate 48.4%, MDD 12%; trade count and PF unreported. Commission was $0.0035/share, but slippage was omitted and there was no OOS period. [SSRN paper](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4729284). Grade B. Pine: partial—the per-symbol rules are easy, but Pine cannot reliably rank the entire U.S. universe; an external scanner is required. Stop-order slippage in news-driven stocks is exactly where the model is weakest, so retail survival is uncertain.
+
+Crucial negative control: the same ORB without the relative-volume/top-20 filter returned only 29% over eight years, 3.2% CAGR, Sharpe 0.48, and 41.4% wins—far below SPY. Thus volatility clustering alone is not an edge; candidate 1 is the strongest evidence, while candidates 2–3 remain attractive but overfitting-sensitive research hypotheses.
