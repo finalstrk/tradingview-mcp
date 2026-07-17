@@ -1,0 +1,25 @@
+{
+  "setup": "torb",
+  "symbol": "CBOT_MINI_DL:YM1!",
+  "market": "futures",
+  "tf": "1",
+  "date": "2026-07-17",
+  "period": {
+    "from": "2026-07-17T03:28:00.000Z",
+    "to": "2026-07-17T08:28:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH"
+  },
+  "trades": 0,
+  "winrate": null,
+  "winrate_pct": null,
+  "pf": null,
+  "max_dd_pct": 0,
+  "net_profit_pct": 0,
+  "avg_trade": null,
+  "currency": "USD",
+  "verdict": "insufficient_data",
+  "criteria": "n<100",
+  "notes": "Requested CBOT_MINI:YM1! resolved to CBOT_MINI_DL:YM1! (delayed-data feed variant; account has no real-time futures license). Chart 1-minute history is hard-capped at ~300-301 bars regardless of scroll/visible-range requests. The entire available window (2026-07-17T03:28-08:28Z) falls outside the RTH session (13:30-20:00Z / 0930-1600 America/New_York), so inSession was false for every bar and no OR/signal evaluation could occur. Hard data-availability blocker, not a strategy-quality result — n=0 well below n>=100, so insufficient_data rather than fail."
+}

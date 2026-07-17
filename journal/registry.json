@@ -381,14 +381,19 @@
           "notes": "Research evidence is index futures only; fx is an untested extrapolation. See docs/research/scalping-20260717/family_orb.md. Validated variant is the 1-minute OR window; on >1m charts the OR degrades to the chart-bar range (unvalidated)."
         },
         "futures": {
-          "status": "candidate",
+          "status": "insufficient_data",
           "timeframes": [
             "1"
           ],
-          "evidence": [],
+          "evidence": [
+            "journal/backtests/torb__CME_MINI_DL_ES1__1__20260717.json",
+            "journal/backtests/torb__CME_MINI_DL_NQ1__1__20260717.json",
+            "journal/backtests/torb__CBOT_MINI_DL_YM1__1__20260717.json"
+          ],
           "bt_winrate": null,
           "bt_pf": null,
-          "notes": "Primary research target (IEEE Access TORB, Grade A source / B in practice). DT TP1/SL overlay is untested vs the EOD-only source exit. Validated variant is the 1-minute OR window; on >1m charts the OR degrades to the chart-bar range (unvalidated)."
+          "updated": "2026-07-17",
+          "notes": "Primary research target (IEEE Access TORB, Grade A source / B in practice). DT TP1/SL overlay is untested vs the EOD-only source exit. Validated variant is the 1-minute OR window; on >1m charts the OR degrades to the chart-bar range (unvalidated). 2026-07-17 setup-verify run: ES1!/NQ1!/YM1! all resolved to *_DL (delayed-data) feed variants — this account has no real-time futures license. 1-minute chart history is hard-capped at ~300-301 bars regardless of scroll/visible-range attempts, and that entire window (2026-07-17T~03:27-08:28Z) falls outside the RTH session (13:30-20:00Z), so 0 trades on all 3 symbols is a data-availability artifact, not a strategy result. No parameter retuning attempted. Re-run once a data plan/account with deeper 1-minute futures history is available."
         },
         "stocks_us": {
           "status": "candidate",
