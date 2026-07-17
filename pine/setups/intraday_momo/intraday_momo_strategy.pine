@@ -9,8 +9,8 @@ groupSession = "Session"
 sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
 customSession = input.session("0930-1600", "Custom session", group=groupSession)
 customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
-openWindow = input.session("0930-1000", "Opening return window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the opening window is auto-derived as [session open, session open + 30min].", group=groupSession)
-decisionWindow = input.session("1530-1600", "Decision window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the decision time is auto-derived as session close - 30min. T = the confirmed bar whose close reaches that time.", group=groupSession)
+openWindow = input.session("0930-1000", "Opening return window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the opening window is auto-derived as [session open, session open + 30min]. Only the window END time is consumed: the first-30-minute return locks on the confirmed close of the bar whose close time reaches it.", group=groupSession)
+decisionWindow = input.session("1530-1600", "Decision window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the decision time is auto-derived as session close - 30min. Only the window START time is consumed: the decision fires on the confirmed close of the bar whose close time reaches it.", group=groupSession)
 
 groupRisk = "Risk"
 slAtrMult = input.float(1.5, "SL (ATR mult)", minval=0.1, step=0.1, group=groupRisk)
@@ -32,22 +32,14 @@ tzStr = switch sessionPreset
     => customTimezone
 
 // Fail-closed timeframe guard: see intraday_momo_indicator.pine for rationale
-// (1m/5m/15m intraday charts only, explicit allowlist; 60m+, other intraday
-// resolutions, and non-time-based charts are unsupported).
+// (1m/5m/15m intraday charts only, explicit allowlist; other intraday
+// resolutions, 60m+, and non-time-based charts are unsupported).
 timeframeOk = timeframe.isintraday and (timeframe.period == "1" or timeframe.period == "5" or timeframe.period == "15")
 
-// Derive the opening-return window and decision window from the resolved
-// session string for preset sessions; Custom preset keeps explicit
-// user-supplied windows. See intraday_momo_indicator.pine for full rationale.
-f_pad2(_n) =>
-    _n < 10 ? "0" + str.tostring(_n) : str.tostring(_n)
-
-f_formatHHMM(_totalMin) =>
-    wrapped = ((_totalMin % 1440) + 1440) % 1440
-    hh = int(wrapped / 60)
-    mm = int(wrapped % 60)
-    f_pad2(hh) + f_pad2(mm)
-
+// Derive the opening-window end and decision time from the resolved session
+// string for preset sessions (open+30min / close-30min); Custom preset keeps
+// explicit user-supplied windows. See intraday_momo_indicator.pine for the
+// full rationale and the Tokyo-preset silent-failure example this fixes.
 f_hhmmToMin(_hhmm) =>
     int(str.tonumber(str.substring(_hhmm, 0, 2))) * 60 + int(str.tonumber(str.substring(_hhmm, 2, 4)))
 
@@ -62,36 +54,35 @@ f_sessionBounds(_s) =>
     [f_hhmmToMin(startClean), f_hhmmToMin(endClean)]
 
 [sessStartMin, sessEndMin] = f_sessionBounds(sessStr)
-derivedOpenWindowEndMin = sessStartMin + 30
-derivedDecisionStartMin = sessEndMin - 30
-
-windowsCoherent = derivedOpenWindowEndMin > sessStartMin and derivedOpenWindowEndMin <= sessEndMin and derivedDecisionStartMin >= derivedOpenWindowEndMin and derivedDecisionStartMin < sessEndMin and derivedDecisionStartMin >= sessStartMin
+[owStartMin, owEndMin] = f_sessionBounds(openWindow)
+[dwStartMin, dwEndMin] = f_sessionBounds(decisionWindow)
 
 isCustomPreset = sessionPreset == "Custom"
-windowsOk = isCustomPreset or windowsCoherent
-effectiveOpenWindow = isCustomPreset ? openWindow : f_formatHHMM(sessStartMin) + "-" + f_formatHHMM(derivedOpenWindowEndMin)
-effectiveDecisionWindow = isCustomPreset ? decisionWindow : f_formatHHMM(derivedDecisionStartMin) + "-" + f_formatHHMM(sessEndMin)
+openWindowEndMin = isCustomPreset ? owEndMin : sessStartMin + 30
+decisionTimeMin = isCustomPreset ? dwStartMin : sessEndMin - 30
+
+// Coherence check (presets AND Custom); fails closed with a warning label.
+// Overnight sessions (start > end) are rejected — minute-of-day comparison
+// does not support midnight wraps (accepted library-wide limitation).
+windowsOk = sessStartMin < sessEndMin and openWindowEndMin > sessStartMin and openWindowEndMin < sessEndMin and decisionTimeMin >= openWindowEndMin and decisionTimeMin < sessEndMin
 
 // configOk gates every stateful/order-producing calculation below, so an
-// incoherent derived window fails closed (no entries) instead of trading
-// off a bad window.
+// incoherent configuration fails closed (no entries) instead of trading off
+// a bad window.
 configOk = timeframeOk and windowsOk
 
 inSession = configOk and not na(time(timeframe.period, sessStr, tzStr))
-// Close-based session/window membership: used to detect the LAST bar of the
-// session (for the EOD exit) and the LAST bar inside the opening window /
-// the bar whose close reaches decision time T, without relying on a
-// subsequent out-of-session bar existing.
-closeInSession = configOk and not na(time_close(timeframe.period, sessStr, tzStr))
-closeInOpenWindow = configOk and not na(time_close(timeframe.period, effectiveOpenWindow, tzStr))
-closeInDecisionWindow = configOk and not na(time_close(timeframe.period, effectiveDecisionWindow, tzStr))
 isNewDay = timeframe.change("D")
 
-// Single managed warning label, mirroring the indicator (not recreated every
-// barstate.islast tick), so a misconfigured preset/timeframe is visible
-// directly on the strategy chart, not just inferred from zero trades.
+// Minute-of-day of this bar's close, in the session timezone (same mechanism
+// as the DT Noise Area Breakout v1 checkpoint detection).
+barCloseMin = hour(time_close, tzStr) * 60 + minute(time_close, tzStr)
+
+// Single managed warning label, mirroring the indicator, so a misconfigured
+// preset/timeframe is visible directly on the strategy chart instead of only
+// inferred from zero trades.
 var label configWarnLabel = na
-warnText = not timeframeOk ? "DT Intraday Momentum v1: unsupported timeframe (1m/5m/15m only)" : not windowsOk ? "DT Intraday Momentum v1: derived session windows incoherent for preset '" + sessionPreset + "' - session too short" : na
+warnText = not timeframeOk ? "DT Intraday Momentum v1: unsupported timeframe (1m/5m/15m only)" : not windowsOk ? "DT Intraday Momentum v1: incoherent session windows for preset '" + sessionPreset + "' (need open+30min and close-30min inside the session, no midnight wrap)" : na
 if barstate.islast
     if not na(warnText)
         if na(configWarnLabel)
@@ -104,24 +95,21 @@ if barstate.islast
         configWarnLabel := na
 
 // Safety flatten: if a position somehow survived into a new session (e.g. a
-// data gap suppressed the prior day's EOD close bar), do not let it sit
+// data gap suppressed the prior day's final session bar), do not let it sit
 // unmanaged or seed the new day's tradedToday state incorrectly.
 if isNewDay and strategy.position_size != 0
     strategy.close_all("Carryover flatten")
 
-// Session-open anchor and first-N-minute (opening window) return
-sessionOpenTrigger = inSession and not inSession[1]
-openWindowExitTrigger = closeInOpenWindow[1] and not closeInOpenWindow
-decisionTrigger = closeInDecisionWindow and not closeInDecisionWindow[1]
-// Final session bar: this bar's open is still inside the session but its
-// close is not (session end reached/passed within this bar) -- fires the
-// EOD exit on the last real session bar itself instead of requiring a
-// subsequent out-of-session bar, which never exists on an RTH-only feed.
-isFinalSessionBar = inSession and not closeInSession
+// First in-session bar after either a session gap (inSession[1] false) or a
+// new-day reset (isNewDay true). See intraday_momo_indicator.pine for the
+// RTH-only-feed rationale this fixes: the plain transition only fires once,
+// on day 1, when the feed has no after-hours bars to flip inSession false.
+sessionOpenTrigger = inSession and (not inSession[1] or isNewDay)
 
 var float sessionOpenPrice = na
 var float open30Return = na
 var bool open30Locked = false
+var bool decisionResolved = false
 var bool tradedToday = false
 var float activeStop = na
 var float activeTp1 = na
@@ -130,31 +118,41 @@ if isNewDay
     sessionOpenPrice := na
     open30Return := na
     open30Locked := false
+    decisionResolved := false
     tradedToday := false
 
 if sessionOpenTrigger
     sessionOpenPrice := open
 
-// Lock the first-N-minute return off the confirmed close of the LAST bar
-// inside the opening window (close[1] on the first bar after exit).
-if openWindowExitTrigger and not na(sessionOpenPrice) and barstate.isconfirmed
-    open30Return := close[1] / sessionOpenPrice - 1.0
+// Lock the first-N-minute return on the confirmed close of the LAST bar
+// inside the opening window: the first confirmed in-session bar whose close
+// time reaches the opening-window end (e.g. the 09:55-10:00 bar on a 5m
+// chart, closing exactly at 10:00). Gated on barstate.isconfirmed so the
+// lock cannot fire off a still-forming realtime bar.
+openWindowLockEvent = inSession and not open30Locked and not na(sessionOpenPrice) and barstate.isconfirmed and barCloseMin >= openWindowEndMin
+if openWindowLockEvent
+    open30Return := close / sessionOpenPrice - 1.0
     open30Locked := true
 
 atrValue = ta.atr(14)
 daySoFarReturn = na(sessionOpenPrice) ? na : close / sessionOpenPrice - 1.0
 sameSign = open30Locked and not na(open30Return) and not na(daySoFarReturn) and open30Return != 0.0 and daySoFarReturn != 0.0 and math.sign(open30Return) == math.sign(daySoFarReturn)
 
-// Decision bar T = the bar whose confirmed close reaches decisionWindow's
-// start time. Gated on barstate.isconfirmed so an order cannot be sized off
-// a still-forming intrabar close that later settles to a different price.
-longSignal = decisionTrigger and inSession and barstate.isconfirmed and sameSign and open30Return > 0.0 and not tradedToday
-shortSignal = decisionTrigger and inSession and barstate.isconfirmed and sameSign and open30Return < 0.0 and not tradedToday
+// Decision bar T = the first confirmed in-session bar whose close time
+// reaches the decision time (session close - 30min for presets), i.e. the
+// bar CLOSING at T, not the bar starting at T (which would decide one bar
+// late: 15:35/15:45 on 5m/15m). barstate.isconfirmed prevents sizing an
+// order off a still-forming intrabar close that later settles differently.
+decisionEvent = inSession and not decisionResolved and barstate.isconfirmed and barCloseMin >= decisionTimeMin
+longSignal = decisionEvent and sameSign and open30Return > 0.0 and not tradedToday
+shortSignal = decisionEvent and sameSign and open30Return < 0.0 and not tradedToday
+if decisionEvent
+    decisionResolved := true
 
-// Entries and exits. SL/TP1 are placed in the same signal block as the
-// entry (using the local sl/tp values, not a var that could lag behind by a
-// bar) so the entry bar itself is protected immediately, not left naked
-// until the next bar's re-issue block runs.
+// Entries and exits. SL/TP1 are placed in the same signal block as the entry
+// (with the freshly computed prices, not a var that could lag a bar) so the
+// entry bar itself is protected immediately, not left naked until the next
+// bar's re-issue block runs.
 if longSignal
     sl = close - atrValue * slAtrMult
     tp1 = close + atrValue * tp1AtrMult
@@ -175,12 +173,11 @@ if shortSignal
     strategy.exit("S-SL", "Short", qty_percent=50, stop=sl)
     tradedToday := true
 
-// TP1 takes 50% off at 1x ATR (DT-contract overlay, not source-validated); the
-// remainder rides the disaster stop to the hard EOD time exit below (TP2 =
-// session close, matching the source study's "let it run to close" behavior).
-// Re-issuing every bar the position is open is redundant on the entry bar
-// itself (already placed above) but keeps the orders resubmitted/visible on
-// subsequent bars using the same stop/limit levels.
+// TP1 takes 50% off at 1x ATR (DT-contract overlay, not source-validated);
+// the remainder rides the disaster stop to the hard EOD time exit below
+// (TP2 = session close, matching the source study's "let it run to close"
+// behavior). Re-issuing while the position is open keeps the exit orders
+// active on bars after the entry bar (same stop/limit levels).
 if strategy.position_size > 0 and not na(activeStop) and not na(activeTp1)
     strategy.exit("L-TP1", "Long", qty_percent=50, stop=activeStop, limit=activeTp1)
     strategy.exit("L-SL", "Long", qty_percent=50, stop=activeStop)
@@ -189,12 +186,18 @@ if strategy.position_size < 0 and not na(activeStop) and not na(activeTp1)
     strategy.exit("S-TP1", "Short", qty_percent=50, stop=activeStop, limit=activeTp1)
     strategy.exit("S-SL", "Short", qty_percent=50, stop=activeStop)
 
-// Hard EOD flat: exit on the final confirmed session bar itself (this bar's
-// open is in-session, its close is not), regardless of TP1/SL status
-// (TP2 = time exit). Detecting the boundary via time_close means this fires
-// even on an RTH-only feed with no bars after the session close, instead of
-// requiring a subsequent out-of-session bar that may never arrive.
-if isFinalSessionBar and barstate.isconfirmed
+// Hard EOD flat: exit on the final session bar itself — the first confirmed
+// in-session bar whose close time reaches the session end (e.g. the
+// 15:55-16:00 bar on a 5m RTH chart). With process_orders_on_close=true the
+// flatten fills at that bar's close, i.e. the session-close price. Detecting
+// the boundary via the bar's own close time means this fires even on an
+// RTH-only feed with no bars after the session close — the old
+// `inSession[1] and not inSession` transition required a subsequent
+// out-of-session bar that never exists there, silently carrying positions
+// overnight. The isNewDay carryover flatten above remains as a backstop for
+// days whose final session bar is missing from the feed entirely.
+isFinalSessionBar = inSession and barstate.isconfirmed and barCloseMin >= sessEndMin
+if isFinalSessionBar and strategy.position_size != 0
     strategy.close_all("EOD")
     activeStop := na
     activeTp1 := na

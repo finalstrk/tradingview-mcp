@@ -83,17 +83,27 @@ and a documented review of the holdout period in
   narrower early and wider late in the day, which is a real behavioral
   difference from the literal source rule and should be treated as a
   simplification, not a faithful reproduction.
-- **Warmup gate:** no signals fire during the first 30 minutes of the
-  session (`warmupWindow` input, default `0930-1000`), and none fire until
-  at least `effectiveWarmupDays = min(minWarmupDays, lookbackDays)` completed
-  sessions are in `moveHistory` (source uses a 14-day lookback; this
+- **Warmup gate:** no signals fire during the warmup window at the start of
+  the session — for every preset except `Custom` this is derived as
+  `[sessionOpen, sessionOpen + warmupMinutes]` (`warmupMinutes` input,
+  default `30`) from the resolved session string; `Custom` uses its own
+  `customWarmupWindow` input (`input.session`, default `0930-1000`)
+  verbatim instead. The boundary is evaluated by each candidate checkpoint
+  bar's own confirmed **close** minute-of-day, in the session timezone —
+  not the bar's open time — so a bar whose close lands exactly on the
+  boundary is eligible. See "Adversarial-review disposition, round 3"
+  below for why this replaced an earlier `input.session`/`time()`-based
+  check. No signals fire until at least
+  `effectiveWarmupDays = min(minWarmupDays, lookbackDays)` completed
+  sessions are in `moveHistory` either (source uses a 14-day lookback; this
   implementation allows a shorter warmup so the indicator produces something
   before 14 full days of history accumulate — document this as looser than
   the source's 14-day requirement). The `min(...)` clamp is required because
   `moveHistory` itself is capped at `lookbackDays` entries (older entries are
   shifted out); without it, setting `minWarmupDays` above `lookbackDays` in
   the inputs would make `hasHistory` permanently false and the setup would
-  silently never signal. See "Adversarial-review disposition" below.
+  silently never signal. See "Adversarial-review disposition, round 2"
+  below.
 - **Entry, `checkpointOnly=false` (unvalidated continuous-evaluation
   variant):** confirmed-bar `close` crossing outside the band
   (`ta.crossover`/`ta.crossunder`, no `request.security`, no lookahead) —
@@ -161,23 +171,32 @@ and a documented review of the holdout period in
   not only in the later per-bar trailing-stop block (see "Adversarial-review
   disposition" below — this closes an entry-bar unprotected-order gap).
 - **Session VWAP anchoring:** the VWAP used in the stop calculation above is
-  anchored to session start (`inSession and not inSession[1]`) and
-  accumulates `hlc3 * volume` only over in-session bars, via a manual
-  running sum rather than `ta.vwap`. `ta.vwap`'s anchor argument only
-  controls *when the running sum resets*, not *which bars are included* —
-  it still adds every bar's contribution regardless of session membership.
-  On a chart that includes pre/post-session bars, that let the "session"
-  VWAP silently include out-of-session price/volume once it stopped
-  resetting on `isNewDay`, and the reset point (`isNewDay`, the exchange
-  calendar-day boundary) is not the same instant as session start anyway.
-  See "Adversarial-review disposition" below.
+  anchored to session start (`sessionStart = inSession and (not
+  inSession[1] or isNewDay)`) and accumulates `hlc3 * volume` only over
+  in-session bars, via a manual running sum rather than `ta.vwap`.
+  `ta.vwap`'s anchor argument only controls *when the running sum resets*,
+  not *which bars are included* — it still adds every bar's contribution
+  regardless of session membership. On a chart that includes pre/post-session
+  bars, that let the "session" VWAP silently include out-of-session
+  price/volume once it stopped resetting on `isNewDay`, and the reset point
+  (`isNewDay`, the exchange calendar-day boundary) is not the same instant
+  as session start anyway. See "Adversarial-review disposition, round 2"
+  below. The `or isNewDay` term in `sessionStart` was added in round 3: on
+  an RTH-only data feed the previous day's last bar is still `inSession`,
+  so `not inSession[1]` alone only fires on the chart's *first* session and
+  never again from day 2 onward, leaving `sumPV`/`sumVol` accumulate across
+  every subsequent day instead of resetting — see "Adversarial-review
+  disposition, round 3" below.
 - **Session close:** the strategy version force-flattens on the last
-  confirmed in-session bar, detected by comparing that bar's `time_close`
-  (in the session timezone) against the session's configured end time
-  parsed from `sessStr`, rather than waiting for a subsequent
-  out-of-session bar to appear on the chart. See "Adversarial-review
-  disposition" below for why the prior `inSession[1] and not inSession`
-  transition check was replaced for the strategy's EOD flat specifically.
+  confirmed in-session bar, detected by comparing that bar's confirmed
+  close minute-of-day (in the session timezone) against the session's
+  configured end time parsed from `sessStr`, rather than waiting for a
+  subsequent out-of-session bar to appear on the chart. The indicator's
+  `sessionEndedToday` label latch uses the identical minute-of-day
+  comparison (round 3; see below) to detect the same final in-session bar.
+  See "Adversarial-review disposition, round 2" below for why the prior
+  `inSession[1] and not inSession` transition check was replaced for the
+  strategy's EOD flat specifically.
 
 ## Inputs
 
@@ -186,7 +205,8 @@ and a documented review of the holdout period in
 | `sessionPreset` | `RTH` | Session preset: Tokyo / London / NY / RTH / Custom |
 | `customSession` | `0930-1600` | Session string used only when preset = Custom |
 | `customTimezone` | `America/New_York` | Timezone used only when preset = Custom |
-| `warmupWindow` | `0930-1000` | No-entry window at the start of the session (first 30 min) |
+| `warmupMinutes` | `30` | No-entry window length after session open, for every preset except Custom (derived as `[sessionOpen, sessionOpen + warmupMinutes]`, evaluated by bar close minute-of-day) |
+| `customWarmupWindow` | `0930-1000` | No-entry window used verbatim only when `sessionPreset = Custom` |
 | `lookbackDays` | `14` | Number of completed sessions averaged into `avgAbsMove` |
 | `minWarmupDays` | `5` | Minimum completed sessions in history before signals are valid |
 | `noiseMult` | `1.0` | Multiplier applied to `avgAbsMove` to build the noise band |
@@ -223,24 +243,31 @@ instruments.
 3. `minWarmupDays` (5) is looser than the source's implicit 14-day lookback,
    so early signals in a fresh backtest use less history than the source
    paper's methodology. `minWarmupDays` is also internally clamped to
-   `min(minWarmupDays, lookbackDays)` (see "Adversarial-review disposition"
-   below) so an input above `lookbackDays` cannot silently disable the
-   setup.
-4. **Strategy EOD flat** now detects the final in-session bar via
-   `time_close` against the parsed session end time (see "Adversarial-review
-   disposition" below), so it no longer depends on a subsequent
-   out-of-session bar existing on the chart. **The indicator's "expired"
-   label state still uses `inSession[1] and not inSession`** (now latched
-   into a persistent per-day flag, see below, but the underlying transition
-   detector is unchanged) — the same convention as every other setup in
-   this repo. On a chart with no bars outside the configured session (e.g.
-   an RTH-only data feed), that transition may never fire and the
-   indicator's forming/expired label state could remain stale past session
-   close; this is an inherited limitation shared with the DT ORB v1 / DT
-   VWAP Reversion v1 reference setups' indicator-side label logic, not
-   something unique to this candidate, and is out of scope for this
-   revision (only the strategy's EOD *order* flattening was in scope for
-   the RTH-only-feed finding).
+   `min(minWarmupDays, lookbackDays)` (see "Adversarial-review disposition,
+   round 2" below) so an input above `lookbackDays` cannot silently disable
+   the setup.
+4. **Session-end detection no longer depends on out-of-session bars, in
+   either file.** Both files detect the final in-session bar the same way:
+   parse the session end hour/minute out of `sessStr` into a
+   minutes-of-day value (`sessionEndMinOfDay`), and compare each confirmed
+   in-session bar's own close time (`closeMinOfDay`, in the session
+   timezone) against it — a bar qualifies once its close reaches or passes
+   the boundary. The strategy's EOD flat (`isLastSessionBar`) and the
+   indicator's "expired" label state (`sessionEndBar`, latched into a
+   persistent per-day `sessionEndedToday` flag reset on `isNewDay`) both
+   use this comparison. Neither requires a subsequent out-of-session bar to
+   exist on the chart, so both work on RTH-only data feeds (see
+   "Adversarial-review disposition, round 2" and "round 3" below). This is
+   a deliberate departure from the `inSession[1] and not inSession`
+   convention still used by some older setups in this repo (DT ORB v1 / DT
+   VWAP Reversion v1). Round 3 replaced the indicator's original
+   `sessionEndBar = inSession and na(time_close(timeframe.period, sessStr,
+   tzStr))` expression, which never evaluated true: `time_close()` keys
+   session membership off the bar's *open* time exactly like `inSession`
+   does, so any bar satisfying `inSession` also has a non-`na`
+   `time_close()` result — the indicator's "expired" state could never be
+   reached through that condition. See "Adversarial-review disposition,
+   round 3" below.
 5. Exchange holiday/early-close calendars are not modeled. `input.session`
    defines the intended session string but cannot recover a specific
    symbol's half-day schedule; a half day is treated the same as a normal
@@ -297,9 +324,16 @@ issues, all fixed in this revision:
    `inSession[1] and not inSession`, true for exactly one bar. An
    untriggered label would show `"expired"` on that one bar, then flip back
    to `"forming"` on every subsequent out-of-session bar (since the
-   one-bar-pulse condition is false again). Fixed by latching the
-   transition into a persistent `sessionEndedToday` var that only resets on
-   the next `isNewDay`, so `"expired"` sticks once reached.
+   one-bar-pulse condition is false again). Fixed by latching session end
+   into a persistent `sessionEndedToday` var that only resets on the next
+   `isNewDay`, so `"expired"` sticks once reached. In a follow-up to the
+   same review round, the detection condition itself was also switched from
+   the `inSession[1]`-based transition to the
+   `sessionEndBar = inSession and na(time_close(timeframe.period, sessStr,
+   tzStr))` idiom used by `pine/setups/torb/torb_indicator.pine` (gated on
+   `barstate.isconfirmed`), so the "expired" state also fires on RTH-only
+   charts where no out-of-session bar ever exists — the same failure mode
+   as item 4 below, on the indicator side.
 3. **VWAP anchor and accumulation scope (both files, HIGH).** The VWAP was
    computed via `ta.vwap(hlc3, isNewDay, 1.0)`, which resets on the
    exchange calendar-day boundary (not session start) and unconditionally
@@ -321,11 +355,10 @@ issues, all fixed in this revision:
    day-of-week suffix on `input.session` is handled the same way as
    elsewhere in this repo) and compare each confirmed in-session bar's
    `time_close` (in the session timezone) against it; flatten on the bar
-   whose close time reaches or passes session end. This only changes the
-   *strategy's* order-flattening trigger — the indicator's `sessionEnded`
-   label logic (see item 2 above) still uses the `inSession[1]`-based
-   transition and carries the same RTH-only-feed limitation the other
-   setups in this repo have (see "Known deviations" item 4).
+   whose close time reaches or passes session end. The indicator's
+   `sessionEndedToday` label latch got the equivalent RTH-only-safe fix in
+   a follow-up (see item 2 above), so neither file depends on
+   out-of-session bars anymore (see "Known deviations" item 4).
 5. **Unprotected entry bar (both files, exit-order gap).** The
    `strategy.exit` calls for the stop/TP1/TP2 were only issued from blocks
    gated on `strategy.position_size > 0` / `< 0`. Pine does not reflect a
@@ -352,6 +385,77 @@ array now documents the level-test checkpoint condition and the
 `minWarmupDays` clamp; `exit_take_profit` documents the same-bar exit-order
 registration; `exit_stop_loss` documents the session-anchored VWAP and the
 `time_close`-based EOD detection.
+
+## Adversarial-review disposition, round 3 (blocking fixes applied)
+
+A third adversarial review, run after round 2 landed, flagged three further
+HIGH-severity issues, all fixed in this revision:
+
+1. **Session VWAP reset never re-fires from day 2 on RTH-only charts (both
+   files, HIGH).** `sessionStart = inSession and not inSession[1]` only
+   fires on the chart's *first* session on an RTH-only data feed: from day
+   2 onward, the previous day's last bar is still `inSession` (there is no
+   intervening out-of-session bar), so `not inSession[1]` is false on every
+   subsequent day's first bar and `sumPV`/`sumVol` never reset — the
+   "session" VWAP silently accumulates price\*volume across every day in
+   the backtest instead of resetting daily. Fixed by adding an
+   `isNewDay`-based fallback: `sessionStart = inSession and (not
+   inSession[1] or isNewDay)`. `isNewDay` (`timeframe.change("D")`) is true
+   on the first bar of every new day regardless of feed type, so it
+   catches the RTH-only case without breaking the original
+   `not inSession[1]` transition on charts that do carry pre/post-session
+   bars.
+2. **Indicator `sessionEndedToday` latch never fires (indicator only,
+   HIGH).** The round 2 fix for the "expired" label state
+   (`sessionEndBar = inSession and na(time_close(timeframe.period, sessStr,
+   tzStr))`) looked like a working RTH-only-safe idiom but was not: unlike
+   `time()`, which returns the bar's *open* time when in-session,
+   `time_close()` performs the identical session-membership test against
+   the *same* session window — it keys off the bar's open time as well, not
+   its close. Any bar for which `inSession` (built from `time()`) is true
+   therefore also has a non-`na` `time_close()` result, so
+   `inSession and na(time_close(...))` was always false and the "expired"
+   state could never be reached; untriggered signals stayed labeled
+   `"forming"` forever, even after the session closed. Fixed by replacing
+   the condition with the same minute-of-day comparison the strategy file
+   already used correctly for its EOD flat:
+   `sessionEndBar = inSession and closeMinOfDay >= sessionEndMinOfDay`,
+   where `closeMinOfDay` is the confirmed bar's own close time
+   (hour\*60+minute, in the session timezone) and `sessionEndMinOfDay` is
+   parsed from `sessStr`. Both values are now computed once, near the top
+   of the indicator, and reused by this check.
+3. **Warmup window preset-agnostic and misaligned with the first eligible
+   checkpoint (both files, HIGH).** The old `warmupWindow` input
+   (`input.session`, default `"0930-1000"`) was a single literal string
+   applied to every session preset, including Tokyo and London, even
+   though `"0930-1000"` has no relationship to those sessions' actual open
+   times. Independently, `input.session`/`time()` key off each bar's
+   **open** time, so on a 5m RTH chart the bar spanning `09:55:00`-`10:00:00`
+   has its open (`09:55`) still inside the `0930-1000` warmup window and was
+   classified as still-in-warmup even though its *close* — the instant the
+   checkpoint decision is actually made — lands exactly on the intended
+   `10:00` boundary. That pushed the first tradable checkpoint out to
+   `10:30` instead of the source-intended `10:00`. Fixed by replacing
+   `warmupWindow` with two inputs: `warmupMinutes` (default `30`), used to
+   derive the warmup boundary as `[sessionOpen, sessionOpen +
+   warmupMinutes]` from the resolved session string for every preset
+   except `Custom`; and `customWarmupWindow` (`input.session`, default
+   `"0930-1000"`), used verbatim only when `sessionPreset = Custom`. The
+   boundary itself is now evaluated by bar **close** minute-of-day
+   (`closeMinOfDay < warmupEndMinOfDay`) rather than `input.session`'s
+   open-time semantics, so the `09:55`-`10:00` bar's close (`600` minutes
+   = `10:00`) is no longer strictly less than the boundary (also `600`)
+   and the bar is correctly treated as warmup-eligible.
+
+Items 1 and 3 required adding a shared `f_sessionParts` helper (parses
+both the start and end hour/minute out of a session string, extending the
+narrower `f_sessionEndParts` the strategy previously had only for its EOD
+check) to both files, so `sessionOpenMinOfDay`/`sessionEndMinOfDay`/
+`closeMinOfDay` are computed once near the top of each file and reused by
+the warmup boundary, the VWAP reset commentary above, and (in the
+strategy) the existing EOD flat. `journal/specs/noise_break_spec.json`'s
+`entry` array was updated to describe the new warmup derivation and the
+close-time-vs-open-time correction; no other spec sections changed.
 
 ## Codex design-review disposition
 

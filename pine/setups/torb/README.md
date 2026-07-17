@@ -71,12 +71,20 @@ use:
   figure. Real index-futures stop-market fills at an OR-break — typically
   one of the highest-slippage moments of the session — could be materially
   worse.
-- **5-minute or slower charts do not reproduce a 1-minute OR.** Setting
-  `orWindow` to `0930-0931` on a 5-minute chart pulls in the full 09:30–09:35
-  bar's high/low (a de facto 5-minute OR), not a true 1-minute OR. If a
-  1-minute probe window is required on a slower chart, this would need
-  `request.security_lower_tf()`, which this implementation does not use.
-  Treat the 1-minute chart as the setup's primary, source-faithful mode.
+- **5-minute or slower charts do not reproduce a 1-minute OR, and are no
+  longer reachable.** A true 1-minute probe window pulled onto a 5-minute
+  chart would silently degrade to the full 09:30–09:35 bar's high/low (a de
+  facto 5-minute OR), not a true 1-minute OR. Reproducing a genuine
+  1-minute probe on a slower chart would need `request.security_lower_tf()`,
+  which this implementation does not use. Both scripts now detect this
+  configuration (OR probe = 1 minute, chart timeframe != 1 minute) and
+  **fail closed**: no long/short signal, no DT label, and no strategy entry
+  is produced while the mismatch holds — only the on-chart warning label and
+  the plotted OR range still update. `journal/registry.json` lists only
+  timeframe `"1"` as validated for every market, matching this: the
+  degraded >1m variant referenced in earlier revisions of this README is no
+  longer a live code path, only a documented historical caveat. Treat the
+  1-minute chart as the setup's only supported mode.
 
 ## Inputs
 
@@ -85,9 +93,27 @@ use:
 | Session preset | `RTH` | Selects the trading session (Tokyo/London/NY/RTH/Custom). |
 | Custom session | `0930-1600` | Session string used when preset = Custom. |
 | Custom timezone | `America/New_York` | Timezone used when preset = Custom. |
-| OR window (probe time) | `0930-0931` | Opening-range probe window; locks OR high/low at window close. |
+| OR window (probe time, Custom preset only) | `0930-0931` | Explicit OR probe window, used **only** when Session preset = Custom. Ignored for Tokyo/London/NY/RTH — see "OR window derivation" below. |
+| OR probe minutes (Tokyo/London/NY/RTH presets) | `1` | Length in minutes of the auto-derived OR probe window for the four presets, measured from the resolved session open. Ignored when Session preset = Custom. |
 | Max OR width (ATR mult) | `2.5` | Rejects the day if `orWidth > ATR(14) * this`, evaluated once at OR lock and frozen for the session. |
 | Signal validity (bars) | `24` | Number of confirmed bars after OR lock during which a breakout may still trigger; after this the state becomes `expired` if untraded. |
+
+### OR window derivation (preset-agnostic fix)
+
+An earlier revision hard-coded the `orWindow` default to `0930-0931` for
+**every** session preset, including Tokyo (opens 09:00 local) and London
+(opens 08:00 local). Since the probe window never overlapped those presets'
+actual session open, the opening range was built from an empty probe (`na`
+OR high/low) for Tokyo and London — the setup silently never traded on
+those presets regardless of `orWindowMismatch`/timeframe.
+
+Both scripts now derive the OR probe window from the **resolved session
+open** for the four presets: `[session open, session open + OR probe
+minutes]` (`orProbeMinutes` input, default 1). The `OR window (probe time,
+Custom preset only)` input is consumed **only** when Session preset =
+Custom; it is ignored for Tokyo/London/NY/RTH. This makes the OR
+window correct for all four presets without requiring per-preset input
+retuning.
 
 ## SL/TP model
 
@@ -109,23 +135,47 @@ use:
 
 ### Session-end (EOD) flatten
 
-The strategy flattens at session end on `sessionEndBar`, defined as `inSession
-and na(time_close(timeframe.period, sessStr, tzStr))` — the last bar whose
-*open* is still inside the session but whose *close* reaches or passes the
-session end boundary. This intentionally diverges from the
-`inSession[1] and not inSession` idiom documented in `pine/PINE_CONVENTIONS.md`
-and still used by the DT ORB v1 reference (`pine/setups/orb`): that idiom
-only fires on the first bar *outside* the session, which never exists on an
-RTH-only chart (no after-hours data), so the flatten never triggered and a
-position could carry overnight unintentionally. This divergence is local to
-`torb` and has not been back-ported to the `orb` reference or to
+**Corrected in this revision.** An earlier revision detected session end via
+`sessionEndBar = inSession and na(time_close(timeframe.period, sessStr,
+tzStr))`. This was wrong and never fired: `time_close(timeframe, session,
+tz)` determines session membership from the bar's **open** time, exactly
+like `time()` — despite the name, it is not evaluated against the bar's
+close time. So `na(time_close(...))` is `na` under exactly the same
+condition as `na(time(...))`, meaning the last in-session bar (whose open is
+still inside the session) always returned a non-`na` `time_close`, and
+`sessionEndBar` was permanently `false`. The strategy's EOD flatten and the
+indicator's `forming`→`expired` state transition both silently never fired
+on any chart, and a position could carry overnight indefinitely.
+
+Both scripts now compute the current bar's close-time minute-of-day
+independently — `barCloseMin = hour(time_close, tzStr) * 60 +
+minute(time_close, tzStr)` — and detect the final session bar as
+`isFinalSessionBar = sessionWindowOk and inSession and barstate.isconfirmed
+and barCloseMin >= sessEndMin`, where `sessEndMin` is the session's end time
+in minutes-of-day (parsed from `sessStr`). This is the same idiom already
+used by `intraday_momo_strategy.pine` / `intraday_momo_indicator.pine` and
+`noise_break_strategy.pine` / `noise_break_indicator.pine`. It intentionally
+diverges from the `inSession[1] and not inSession` idiom documented in
+`pine/PINE_CONVENTIONS.md` and still used by the DT ORB v1 reference
+(`pine/setups/orb`): that idiom only fires on the first bar *outside* the
+session, which never exists on an RTH-only chart (no after-hours data), so
+it would have the same silent-carryover problem the old `time_close` idiom
+had. This divergence is local to `torb` (and the other setups listed above)
+and has not been back-ported to the `orb` reference or to
 `pine/PINE_CONVENTIONS.md`.
 
-`torb_indicator.pine` uses the same `sessionEndBar` detection for its
+`sessionWindowOk = sessStartMin < sessEndMin` guards the midnight-wrap case:
+minute-of-day comparison cannot represent an overnight session, so
+`isFinalSessionBar` (and OR-window derivation) fail closed — never fire — if
+the resolved session's end time is not numerically after its start time.
+The strategy additionally keeps an `isNewDay`-triggered carryover flatten as
+a backstop for a session whose final bar is entirely missing from the feed
+(same pattern as `intraday_momo_strategy.pine`).
+
+`torb_indicator.pine` uses the same `isFinalSessionBar` detection for its
 session-end state transition: an eligible-but-unfired range flips to
 `expired` on the last in-session bar. With the old idiom this transition
-never fired on an RTH-only chart and the label stayed `forming` until the
-next day's reset.
+never fired and the label stayed `forming` until the next day's reset.
 
 ## Known limitations
 
@@ -137,16 +187,30 @@ next day's reset.
   ending after it) would have its state reset mid-session instead of at the
   session boundary. This is an accepted limitation shared by every setup in
   this library (see `pine/PINE_CONVENTIONS.md`'s session-handling
-  convention), not something fixed locally in `torb`.
-- **On-chart warning for the 1-minute-OR / chart-timeframe mismatch.** Both
-  `torb_indicator.pine` and `torb_strategy.pine` now detect, at input-parse
-  time, whether the configured `orWindow` is exactly 1 minute long while the
-  chart timeframe is not 1 minute, and draw a single managed warning label
-  (`"TORB: OR window=1m but chart TF=... — OR degrades to chart-bar range
-  (unvalidated variant)"`) anchored to the latest bar. This does not change
-  the underlying limitation described above ("5-minute or slower charts do
-  not reproduce a 1-minute OR") — it only makes the degraded-mode condition
-  visible on the chart instead of silent.
+  convention), not something fixed locally in `torb`. As of this revision,
+  the same overnight/midnight-wrap case is additionally caught and
+  fail-closed by `sessionWindowOk` (see "Session-end (EOD) flatten" above)
+  for the specific minute-of-day comparisons this setup now uses — signals
+  are disabled rather than misbehaving, but the daily-reset timing itself is
+  still the accepted, unfixed limitation described here.
+- **On-chart warning for the 1-minute-OR / chart-timeframe mismatch — now
+  fail-closed, not just a warning.** Both `torb_indicator.pine` and
+  `torb_strategy.pine` detect, at input-parse time, whether the *effective*
+  OR probe window (after preset-based derivation — see "OR window
+  derivation" above) is exactly 1 minute long while the chart timeframe is
+  not 1 minute, and draw a single managed warning label (`"TORB: OR
+  window=Nm but chart TF=... — signals disabled (unvalidated variant)"`)
+  anchored to the latest bar. Unlike the prior revision, this condition now
+  also **disables all long/short signals and DT labels** (`tradingAllowed`
+  gate) — it no longer just warns while silently trading the degraded
+  chart-bar-range OR. This matches `journal/registry.json`, which lists only
+  timeframe `"1"` as validated for every market: the previously-described
+  ">1m degraded variant" is no longer a reachable code path, only a
+  documented historical caveat (see "5-minute or slower charts do not
+  reproduce a 1-minute OR..." above). The underlying limitation itself
+  (`request.security_lower_tf()` is not used) is unchanged — this only
+  changes what the setup does when the mismatch is detected, from "trade
+  anyway with a visible warning" to "refuse to trade."
 
 ## Markets / session
 

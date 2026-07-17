@@ -13,7 +13,8 @@ string groupRisk = "Risk"
 sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
 customSession = input.session("0930-1600", "Custom session", group=groupSession)
 customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
-warmupWindow = input.session("0930-1000", "Warmup window (no entries, first 30 min)", group=groupSession)
+warmupMinutes = input.int(30, "Warmup minutes after session open (non-Custom presets)", minval=0, group=groupSession)
+customWarmupWindow = input.session("0930-1000", "Custom warmup window (used only when preset = Custom)", group=groupSession)
 
 // Setup inputs — see noise_break_indicator.pine header comment for the
 // avgAbsMove fallback design rationale (per-time-of-day matrix rejected as
@@ -49,10 +50,54 @@ tzStr = switch sessionPreset
     "RTH" => "America/New_York"
     => customTimezone
 
+// Session/warmup/EOD boundaries, in minutes-of-day (session timezone),
+// parsed from the resolved session strings. Same split-on-"-"/split-on-":"
+// idiom as pine/setups/torb/torb_strategy.pine f_sessionMinutes, so a
+// day-of-week suffix on input.session (e.g. "0930-1600:23456") is stripped
+// the same way the rest of this library does. Assumes non-wrapping
+// sessions (end time > start time within the same trading day), matching
+// every other setup in this repo.
+f_sessionParts(_s) =>
+    parts = str.split(_s, "-")
+    startRaw = array.size(parts) > 0 ? array.get(parts, 0) : ""
+    endRaw = array.size(parts) > 1 ? array.get(parts, 1) : ""
+    startParts = str.split(startRaw, ":")
+    endParts = str.split(endRaw, ":")
+    startClean = array.size(startParts) > 0 ? array.get(startParts, 0) : startRaw
+    endClean = array.size(endParts) > 0 ? array.get(endParts, 0) : endRaw
+    startHour = int(str.tonumber(str.substring(startClean, 0, 2)))
+    startMinute = int(str.tonumber(str.substring(startClean, 2, 4)))
+    endHour = int(str.tonumber(str.substring(endClean, 0, 2)))
+    endMinute = int(str.tonumber(str.substring(endClean, 2, 4)))
+    [startHour, startMinute, endHour, endMinute]
+
+[sessionStartHour, sessionStartMinute, sessionEndHour, sessionEndMinute] = f_sessionParts(sessStr)
+sessionOpenMinOfDay = sessionStartHour * 60 + sessionStartMinute
+sessionEndMinOfDay = sessionEndHour * 60 + sessionEndMinute
+
+// Warmup boundary — derived as [session open, session open + warmupMinutes]
+// for every preset except Custom, where customWarmupWindow's own end time
+// defines the boundary instead. Evaluated by BAR CLOSE minute-of-day, not
+// bar open: input.session()/time() key off the bar's OPEN time, so on a
+// chart whose bars don't align 1:1 with the warmup boundary (e.g. a 5m bar
+// spanning 09:55-10:00 for a 30-minute warmup from a 09:30 open) an
+// open-time check classified that bar as still-in-warmup even though its
+// close reaches the boundary exactly, pushing the first eligible
+// checkpoint to 10:30 instead of the intended 10:00 (see README,
+// adversarial-review round 3).
+[_customWarmupStartHour, _customWarmupStartMinute, customWarmupEndHour, customWarmupEndMinute] = f_sessionParts(customWarmupWindow)
+warmupEndMinOfDay = sessionPreset == "Custom" ? (customWarmupEndHour * 60 + customWarmupEndMinute) : (sessionOpenMinOfDay + warmupMinutes)
+closeMinOfDay = hour(time_close, tzStr) * 60 + minute(time_close, tzStr)
+
 inSession = not na(time(timeframe.period, sessStr, tzStr))
-inWarmup = not na(time(timeframe.period, warmupWindow, tzStr))
+inWarmup = closeMinOfDay < warmupEndMinOfDay
 isNewDay = timeframe.change("D")
-sessionStart = inSession and not inSession[1]
+// sessionStart also fires on isNewDay: on an RTH-only data feed the
+// previous day's last bar is still `inSession`, so `not inSession[1]`
+// alone only fires on the chart's first session and never again from day 2
+// onward, leaving sumPV/sumVol accumulating across every subsequent day
+// (see README, adversarial-review round 3).
+sessionStart = inSession and (not inSession[1] or isNewDay)
 
 // Persistent state
 var array<float> moveHistory = array.new<float>(0)
@@ -80,27 +125,13 @@ if inSession
     sumVol := nz(sumVol) + volume
 vwapVal = sumVol > 0 ? sumPV / sumVol : na
 
-// Session end time (hour, minute), parsed from sessStr, used below to
-// detect the final in-session bar for the EOD flat without depending on a
+// Final in-session bar for the EOD flat, detected without depending on a
 // subsequent out-of-session bar existing on the chart (finding: on an
 // RTH-only data feed, `inSession[1] and not inSession` never fires because
-// no out-of-session bar ever arrives, so the EOD close silently never runs).
-// Same split-on-"-"/split-on-":" idiom as pine/setups/torb/torb_strategy.pine
-// f_sessionMinutes, so a day-of-week suffix on input.session (e.g.
-// "0930-1600:23456") is stripped the same way the rest of this library does.
-f_sessionEndParts(_s) =>
-    parts = str.split(_s, "-")
-    endRaw = array.size(parts) > 1 ? array.get(parts, 1) : ""
-    endParts = str.split(endRaw, ":")
-    endClean = array.size(endParts) > 0 ? array.get(endParts, 0) : endRaw
-    endHour = int(str.tonumber(str.substring(endClean, 0, 2)))
-    endMinute = int(str.tonumber(str.substring(endClean, 2, 4)))
-    [endHour, endMinute]
-
-[sessionEndHour, sessionEndMinute] = f_sessionEndParts(sessStr)
-closeHourTz = hour(time_close, tzStr)
-closeMinuteTz = minute(time_close, tzStr)
-isLastSessionBar = inSession and (closeHourTz > sessionEndHour or (closeHourTz == sessionEndHour and closeMinuteTz >= sessionEndMinute))
+// no out-of-session bar ever arrives, so the EOD close silently never
+// runs). Reuses the closeMinOfDay/sessionEndMinOfDay minutes-of-day values
+// already parsed from sessStr above.
+isLastSessionBar = inSession and closeMinOfDay >= sessionEndMinOfDay
 
 if isNewDay
     if not na(sessionOpenToday) and not na(lastSessionClose) and sessionOpenToday > 0

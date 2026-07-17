@@ -9,7 +9,8 @@ string groupSession = "Session"
 sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
 customSession = input.session("0930-1600", "Custom session", group=groupSession)
 customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
-orWindow = input.session("0930-0931", "OR window (probe time)", group=groupSession)
+orWindow = input.session("0930-0931", "OR window (probe time, Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the OR window is auto-derived as [session open, session open + OR probe minutes] — this input is ignored for those presets.", group=groupSession)
+orProbeMinutes = input.int(1, "OR probe minutes (Tokyo/London/NY/RTH presets)", minval=1, tooltip="Length of the derived opening-range probe window for Tokyo/London/NY/RTH presets, measured from the resolved session open. Ignored when Session preset = Custom (use the OR window input above instead).", group=groupSession)
 string groupFilters = "Filters"
 maxOrWidthAtr = input.float(2.5, "Max OR width (ATR mult)", minval=0.1, step=0.1, group=groupFilters)
 signalValidityBars = input.int(24, "Signal validity (bars)", minval=1, group=groupFilters)
@@ -29,8 +30,53 @@ tzStr = switch sessionPreset
     "RTH" => "America/New_York"
     => customTimezone
 
-inSession = not na(time(timeframe.period, sessStr, tzStr))
-inOrWindow = not na(time(timeframe.period, orWindow, tzStr))
+isCustomPreset = sessionPreset == "Custom"
+
+// Minute-of-day helpers, shared by the OR-window derivation and the
+// session-end detection below (same idiom as intraday_momo_strategy.pine /
+// noise_break_strategy.pine).
+f_hhmmToMin(_hhmm) =>
+    int(str.tonumber(str.substring(_hhmm, 0, 2))) * 60 + int(str.tonumber(str.substring(_hhmm, 2, 4)))
+
+f_sessionBounds(_s) =>
+    parts = str.split(_s, "-")
+    startRaw = array.size(parts) > 0 ? array.get(parts, 0) : ""
+    endRaw = array.size(parts) > 1 ? array.get(parts, 1) : ""
+    startParts = str.split(startRaw, ":")
+    endParts = str.split(endRaw, ":")
+    startClean = array.size(startParts) > 0 ? array.get(startParts, 0) : startRaw
+    endClean = array.size(endParts) > 0 ? array.get(endParts, 0) : endRaw
+    [f_hhmmToMin(startClean), f_hhmmToMin(endClean)]
+
+f_minToHHMM(_min) =>
+    // int(...) floor is required: Pine v6 `/` always returns float, and a
+    // fractional component would leak into the derived session string
+    // (e.g. 570 / 60 -> "9.5" instead of "0930"), silently breaking time().
+    hh = int(_min / 60)
+    mm = int(_min % 60)
+    (hh < 10 ? "0" : "") + str.tostring(hh) + (mm < 10 ? "0" : "") + str.tostring(mm)
+
+[sessStartMin, sessEndMin] = f_sessionBounds(sessStr)
+
+// Midnight-wrap guard: minute-of-day comparison (used both for the derived
+// OR window and for session-end detection below) cannot represent an
+// overnight session where the end time is numerically before the start
+// time. Fail closed rather than silently misbehave — this is a stricter,
+// explicit version of the overnight-Custom-session limitation already
+// documented in README.md "Known limitations".
+sessionWindowOk = sessStartMin < sessEndMin
+
+// OR window is auto-derived from the resolved session open for the preset
+// sessions (Tokyo/London/NY/RTH open at different clock times, so a fixed
+// "0930-0931" probe window silently never matches non-NY presets). Custom
+// preset keeps the explicit user-supplied orWindow.
+[owStartMinCustom, owEndMinCustom] = f_sessionBounds(orWindow)
+derivedOrWindowStr = f_minToHHMM(sessStartMin) + "-" + f_minToHHMM(sessStartMin + orProbeMinutes)
+effectiveOrWindowStr = isCustomPreset ? orWindow : derivedOrWindowStr
+orWindowMinutes = isCustomPreset ? owEndMinCustom - owStartMinCustom : orProbeMinutes
+
+inSession = sessionWindowOk and not na(time(timeframe.period, sessStr, tzStr))
+inOrWindow = sessionWindowOk and not na(time(timeframe.period, effectiveOrWindowStr, tzStr))
 // Daily state reset. timeframe.change("D") flips at the exchange's calendar
 // day boundary, not at the configured session's own start/end. This is
 // correct for same-day sessions (Tokyo/London/NY/RTH and any Custom session
@@ -47,23 +93,16 @@ atrValue = ta.atr(14)
 
 // OR-window / chart-timeframe mismatch detector (see README.md "5-minute or
 // slower charts do not reproduce a 1-minute OR"). Only meaningful when the
-// configured OR window is exactly 1 minute long, since that is the specific
+// effective OR window is exactly 1 minute long, since that is the specific
 // case that silently degrades on any chart timeframe coarser than 1 minute.
-f_sessionMinutes(_s) =>
-    parts = str.split(_s, "-")
-    startRaw = array.size(parts) > 0 ? array.get(parts, 0) : ""
-    endRaw = array.size(parts) > 1 ? array.get(parts, 1) : ""
-    startParts = str.split(startRaw, ":")
-    endParts = str.split(endRaw, ":")
-    startClean = array.size(startParts) > 0 ? array.get(startParts, 0) : startRaw
-    endClean = array.size(endParts) > 0 ? array.get(endParts, 0) : endRaw
-    startMin = str.tonumber(str.substring(startClean, 0, 2)) * 60 + str.tonumber(str.substring(startClean, 2, 4))
-    endMin = str.tonumber(str.substring(endClean, 0, 2)) * 60 + str.tonumber(str.substring(endClean, 2, 4))
-    endMin - startMin
-
-var float orWindowMinutes = f_sessionMinutes(orWindow)
 chartIsOneMinute = timeframe.isminutes and timeframe.multiplier == 1
 orWindowMismatch = orWindowMinutes == 1 and not chartIsOneMinute
+
+// Fail-closed gate for the two configuration hazards above: an invalid
+// (midnight-wrapping) session window, or a true 1-minute OR probe running on
+// a chart that cannot reproduce it. The OR range is still built and plotted
+// for visibility, but no entries are allowed while either condition holds.
+tradingAllowed = sessionWindowOk and not orWindowMismatch
 
 // Opening range state
 var float orHigh = na
@@ -111,8 +150,11 @@ barsSinceLock = orLocked and not na(orLockBar) ? bar_index - orLockBar : na
 validityOk = orLocked and orEligible and not na(barsSinceLock) and barsSinceLock < signalValidityBars
 
 // Entry trigger: first confirmed bar CLOSING outside the locked OR range.
-longSignal = inSession and validityOk and not tradedToday and close > orHigh
-shortSignal = inSession and validityOk and not tradedToday and close < orLow
+// Gated on tradingAllowed so a midnight-wrapping session window or a
+// 1-minute-probe/coarser-chart mismatch disables signals entirely (fail
+// closed) rather than trading off a range the setup cannot correctly build.
+longSignal = inSession and validityOk and not tradedToday and close > orHigh and tradingAllowed
+shortSignal = inSession and validityOk and not tradedToday and close < orLow and tradingAllowed
 
 // Entries and TP1/runner exits are placed in the same signal block, using
 // the SL/TP prices already computed on this bar, so the bracket is queued
@@ -144,20 +186,43 @@ if shortSignal and strategy.position_size == 0
     strategy.exit("S-Runner", "Short", qty_percent=50, stop=activeStop)
     tradedToday := true
 
+// Safety flatten: if a position somehow survived into a new session (e.g. a
+// data gap suppressed the prior day's final session bar), do not let it sit
+// unmanaged or seed the new day's tradedToday state incorrectly. Same
+// backstop as intraday_momo_strategy.pine / noise_break_strategy.pine.
+if isNewDay and strategy.position_size != 0
+    strategy.close_all("Carryover flatten")
+    activeStop := na
+    activeTp1 := na
+
 // EOD / session-end flat — approximates the source study's "hold to close"
-// exit. Detected via the final-session-bar idiom below, NOT the library-wide
-// `inSession[1] and not inSession` convention documented in
-// pine/PINE_CONVENTIONS.md (and still used by the DT ORB v1 reference this
-// setup is derived from). That convention only fires on the first bar
-// *outside* the session, which never exists on an RTH-only chart with no
-// after-hours data — the position would silently carry overnight instead of
-// flattening. `sessionEndBar` instead flags the last bar *inside* the
-// session: its open still qualifies for `inSession` but its close reaches or
-// passes the session end boundary, so `time_close()` no longer qualifies.
-// This divergence from the orb reference is intentional and local to torb;
-// it has not been back-ported to pine/setups/orb.
-sessionEndBar = inSession and na(time_close(timeframe.period, sessStr, tzStr))
-if sessionEndBar
+// exit. Detected via the minute-of-day idiom below, NOT
+// `na(time_close(timeframe.period, sessStr, tzStr))` (the setup's previous
+// approach) and NOT the library-wide `inSession[1] and not inSession`
+// convention documented in pine/PINE_CONVENTIONS.md (and still used by the
+// DT ORB v1 reference this setup is derived from).
+//
+// Both of the rejected approaches share the same flaw: `time_close(tf,
+// session, tz)` determines session membership from the bar's OPEN time,
+// exactly like `time()` — it is not evaluated against the bar's close time
+// despite the name. So `na(time_close(...))` is na under exactly the same
+// condition as `na(time(...))`, and the last in-session bar (whose open is
+// still inside the session) always returns a non-na time_close. The
+// `inSession and na(time_close(...))` condition therefore NEVER fires, and
+// `inSession[1] and not inSession` never fires either on an RTH-only feed
+// with no after-hours bars — both leave the position carrying overnight.
+//
+// `isFinalSessionBar` instead flags the first CONFIRMED in-session bar whose
+// close time (computed independently via hour()/minute() in the session
+// timezone, not via time_close()) reaches or passes the session end minute —
+// e.g. the bar closing at 16:00 on an RTH 1-minute chart. `sessionWindowOk`
+// guards the midnight-wrap case (see above): if the session window itself is
+// invalid, isFinalSessionBar cannot fire and the isNewDay backstop above is
+// the only flatten mechanism for that (already fail-closed, signal-disabled)
+// configuration.
+barCloseMin = hour(time_close, tzStr) * 60 + minute(time_close, tzStr)
+isFinalSessionBar = sessionWindowOk and inSession and barstate.isconfirmed and barCloseMin >= sessEndMin
+if isFinalSessionBar
     strategy.close_all("EOD")
     activeStop := na
     activeTp1 := na
@@ -169,18 +234,23 @@ fill(orHighPlot, orLowPlot, color=color.new(color.yellow, 90), title="OR Range")
 plotshape(longSignal, title="TORB Long", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), text="TORB L", size=size.tiny)
 plotshape(shortSignal, title="TORB Short", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="TORB S", size=size.tiny)
 
-// Single managed warning label: OR window is configured as a true 1-minute
-// probe but the chart is not a 1-minute chart, so the OR silently degrades
-// to the current chart bar's full range (see README.md). One label instance
-// is created once and then re-anchored to the latest bar every bar via
-// label.set_x/label.set_y, rather than a new label per bar.
+// Single managed warning label covering both fail-closed conditions above:
+// (1) OR window configured as a true 1-minute probe but the chart is not a
+// 1-minute chart (OR degrades to the chart-bar range, see README.md), or
+// (2) an invalid (midnight-wrapping) session window. Either condition
+// disables signals entirely (tradingAllowed / sessionWindowOk above), not
+// just this warning. One label instance is created once and then
+// re-anchored to the latest bar every bar via label.set_x/label.set_y,
+// rather than a new label per bar.
+warnText = not sessionWindowOk ? "TORB: session window invalid (start >= end, midnight wrap unsupported) — signals disabled" : orWindowMismatch ? "TORB: OR window=" + str.tostring(orWindowMinutes) + "m but chart TF=" + timeframe.period + " — signals disabled (unvalidated variant)" : na
 var label orWarnLabel = na
-if orWindowMismatch
+if not na(warnText)
     if na(orWarnLabel)
-        orWarnLabel := label.new(bar_index, high, "TORB: OR window=1m but chart TF=" + timeframe.period + " — OR degrades to chart-bar range (unvalidated variant)", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+        orWarnLabel := label.new(bar_index, high, warnText, style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
     else
         label.set_x(orWarnLabel, bar_index)
         label.set_y(orWarnLabel, high)
+        label.set_text(orWarnLabel, warnText)
 else if not na(orWarnLabel)
     label.delete(orWarnLabel)
     orWarnLabel := na

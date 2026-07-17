@@ -114,6 +114,48 @@ implementation used the bar's open time, so the 15:00-15:05 bar (whose OPEN
 is 15:00) was the first one flagged and the flatten fired a full bar late, at
 its 15:05 close.
 
+## Known deviations / behavioral changes (adversarial-review fixes)
+
+These are behavioral changes applied after the initial implementation, in
+response to an adversarial review. They change bar-level behavior relative to
+the first committed version and must be treated as a new validation run if
+compared against any earlier backtest output:
+
+- **Confirmed-bar gating (indicator)**: all trend-count, arming, and
+  confirmation/signal state updates in the indicator are now gated on
+  `barstate.isconfirmed`, matching `pine/setups/torb/torb_indicator.pine`.
+  Previously an intrabar tick could latch `trendDir`, arm a touch, or fire
+  the label/alert before the bar closed, then repaint. The strategy twin was
+  already effectively bar-close-only via `calc_on_every_tick=false` +
+  `process_orders_on_close=true`, so live/backtest strategy behavior is
+  unchanged by this item; the indicator now matches it explicitly.
+- **Flatten timing fixed (strategy + indicator marker)**: the flatten is now
+  detected on the bar whose **close** time reaches the flatten target
+  (`time_close` in the session timezone). Previously the window test used
+  the bar's open time, so on 5m charts the "15:00 flatten" actually executed
+  at 15:05 (the close of the 15:00-15:05 bar). Backtests run before this fix
+  hold positions one bar longer than intended.
+- **Exit-order gap closed (strategy)**: `strategy.exit` (SL/TP1/TP2) is now
+  placed in the same signal block as `strategy.entry`, using the SL/TP prices
+  computed at signal time. Previously exits were only issued from a separate
+  `strategy.position_size != 0`-guarded block, which (with
+  `process_orders_on_close=true`) left the entry bar's fill unprotected until
+  the next bar's close. The every-bar refresh block is retained so exits
+  persist across bars; it issues the same order IDs/prices, so there is no
+  duplicate order effect.
+- **Session-derived windows (strategy + indicator)**: the fixed
+  `0945-1130` / `1500-1600` clock-time session inputs were replaced by
+  offsets from the resolved session open/close (see "Session-derived
+  windows" above). Defaults are behavior-identical for the RTH/NY preset;
+  Tokyo/London/Custom presets now get windows anchored to their own session
+  instead of silently reusing NY clock times. Invalid combinations fail
+  closed with a single managed warning label (indicator) and no
+  entries/flatten (strategy).
+- **Typed candidate declarations (indicator)**: `candidateSl` / `candidateTp1`
+  / `candidateTp2` are now declared as `float ... = na` — the untyped
+  `x = na` form had no inferable type and did not compile. No behavioral
+  effect beyond making the script compile.
+
 ## DT adaptations that deviate from the source evidence
 
 - The source study's confirmation bar also requires the bar to be bullish/
@@ -148,8 +190,9 @@ its 15:05 close.
 | `sessionPreset` | `RTH` | Overall session preset (Tokyo/London/NY/RTH/Custom) controlling VWAP accumulation window and timezone. |
 | `customSession` | `0930-1600` | Custom overall session string, used when `sessionPreset = Custom`. |
 | `customTimezone` | `America/New_York` | Custom timezone, used when `sessionPreset = Custom`. |
-| `entryWindow` | `0945-1130` | Window for 3-bar trend qualification, touch, and trigger (matches the source's strongest sub-window). |
-| `flattenWindow` | `1500-1600` | Hard flatten window; the strategy closes all positions on the first bar inside it. |
+| `entryStartOffsetMin` | `15` | Entry window start, in minutes after the resolved session open (default reproduces 09:45 for RTH/NY). Window for 3-bar trend qualification, touch, and trigger. |
+| `entryWindowDurationMin` | `105` | Entry window duration in minutes (default reproduces the source's strongest 0945-1130 sub-window for RTH/NY). |
+| `flattenBeforeCloseMin` | `60` | Hard flatten time, in minutes before the resolved session close (default reproduces 15:00 for RTH/NY); the strategy closes all positions on the bar whose CLOSE time reaches it. |
 | `rsiLength` | `2` | RSI period for the touch trigger. |
 | `rsiOversold` | `25.0` | RSI threshold below which a VWAP touch arms a long. |
 | `rsiOverbought` | `75.0` | RSI threshold above which a VWAP touch arms a short. |
@@ -165,14 +208,16 @@ its 15:05 close.
   within `tp1MaxAtrMult` x ATR(14) of entry, else `tp1MaxAtrMult` x ATR(14) from
   entry.
 - TP2 (remaining 50%): entry + 2 x (TP1 distance), same direction.
-- Hard time exit: `flattenWindow` (default 15:00 local) or overall session end,
+- Hard time exit: the derived flatten time (session close minus
+  `flattenBeforeCloseMin`, default 15:00 local for RTH/NY — executed on the
+  close of the bar whose close time reaches it) or overall session end,
   whichever comes first.
 
 ## Recommended markets / sessions
 
 - Primary: QQQ or a QQQ-tracking future/CFD on 5-minute bars, `RTH` session
-  preset, default `0945-1130` entry window — this matches the only market the
-  underlying evidence actually covers.
+  preset, default offsets (which derive the `0945-1130` entry window there) —
+  this matches the only market the underlying evidence actually covers.
 - Index futures (ES/NQ) on 5-minute bars are a plausible extension given the
   adjacent Opening-Drive AVWAP family's success there, but this exact
   VWAP+RSI(2) rule set has **not** been tested on futures by any cited source —
