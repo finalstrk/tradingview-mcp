@@ -1,33 +1,108 @@
 # WORKSTATE
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 ## DT Pair-Trader layer (2026-07-15) — BUILT, unverified live
 
 - 新規レイヤー: リアルタイム・ペアトレーディング支援。3層コスト設計
   （main=オーケストレーションのみ / Sonnet サブエージェント4種 / 重い推論は
-  Codex gpt-5.6-sol high へ wrapper 委譲。2026-07-15 に gpt-5.5 xhigh から
-  リプレイス。`CODEX_BIN=/Users/yukio/bin/codex` 必須 — nvm 側 v0.137 は
-  gpt-5.6-sol 未対応）。
-- 成果物: `.claude/agents/{market-watcher,setup-analyst,risk-officer,journal-scribe}.md`、
+  公式 `codex@openai-codex` companion の Codex gpt-5.6-sol high へ委譲）。
+- 成果物: `.claude/agents/{pair-trader-orchestrator,market-watcher,setup-analyst,risk-officer,journal-scribe}.md`、
   `.claude/commands/pair-session.md`、`docs/pair-trader.md`、`.gitignore` に `._*` 追加。
-- ガードレール: registry `adopted` のみライブ判定、発注・執行は常に人間、
-  判定は journal JSONL に全件記録（GO/WAIT/NO-GO）、breakdown 100点スケール
+- ガードレール: registry `adopted` かつ signal `forming|triggered` のみライブ判定。
+  state がそれ以外または label 0件は `no_signal`、forming/triggered かつ non-adopted
+  だけを `live_ineligible` / `NOT-ELIGIBLE` とする（判定・screenshot・journal・
+  companion なし）。発注・執行は常に人間。eligible 判定だけを journal JSONL に記録
+  （GO/WAIT/NO-GO）、breakdown 100点スケール
   （setup30/mtf20/level15/session10/track10/rr15）。
 - 既知の制約:
-  - `codex-from-claude.sh exec` は常に `--dangerously-bypass-approvals-and-sandbox`
-    を付与するため Codex 内部 sandbox は無効。ガードはプロンプト指示
-    （"Output analysis text only..."）+ 実行後 `git status --porcelain` 検証。
-  - 新規 agent 定義は次セッションから subagent_type として有効（当日セッションでは未登録）。
+  - 公式 companion は `task --fresh`、`--write` なしで read-only Codex task
+    sandbox を使用。プロンプト末尾の no-file-write 指示と実行前後の3 fingerprint
+    比較は defense in depth として維持。
+  - invocation plugin の `--tools` は built-in tool を制限し、検証済み agent
+    frontmatter が exact MCP/subagent capability boundary を定義する。`allowedTools` は
+    permission preapproval であって availability 境界ではない。親に Bash/raw data
+    tool はない一方、子 agent の Bash 内 command と no-order は hard enforcement
+    ではない点を residual として維持。
+  - project agent 定義の runtime discovery は新しい Claude Code session で確認が必要。
   - この sandbox シェルでは `node` が nvm lazy-load 破損で直接実行不可の環境がある
     （journal-scribe の `node scripts/journal_stats.js` が失敗しうる）。
 - codex-review 2巡実施（gpt-5.6-sol high）。1巡目 high 7 / medium 2 → 修正、
   2巡目の残指摘のうち「Bash のコマンド単位 allowlist 強制」は agent frontmatter の
   表現力上不可のため Known Limitations として文書化（hook 強制は将来課題）。
-  watcher の denylist は MCP ツール名プレフィックス未確定のため初回ライブ実行で
-  実名確認が必要（docs/pair-trader.md Known Limitations 参照）。
-- 未実施: ライブ TradingView 接続での /pair-session 実走検証（MCP ツール実名確認
-  含む）、commit 済み範囲以降の追加変更。
+  watcher は Ubuntu の実名 `mcp__tradingview__...` 読み取りツールだけを allowlist。
+- Revision lane（2026-07-16）:
+  - bounded main-thread agent を追加。`start|next` は1 cycleでreturn、`end` は health
+    非依存で summary のみ。
+  - watcher に `snapshot_status` を追加し、quote / DT labels / OHLCV summary の失敗を
+    incomplete として judgement path を停止。
+  - setup/risk は eligibility を companion 前に検査し、成功出力返却、degraded fallback、
+    `analysis_mode` 伝播を契約化。
+  - judgement append は最終行を再読・parse・id/shape 検証。`journal_stats.js` は trade
+    append 後だけ実行。
+  - offline verification PASS: real frontmatter YAML parse（`._*` 除外）、setup/risk
+    companion block `bash -n`、non-adopted/non-live-state sentinel 実行、watcher 7 tool
+    / orchestrator 7 tool exact assertion、`src/tools` 登録 78 unique、stale Pair-Trader
+    reference scan、許可 path 8/8、`git diff --check @{upstream}`。live TradingView、
+    journal append、companion model 実行は未実施。
+- Final repair lane（2026-07-16）:
+  - summary の exact zero object を health/chart/registry より前に初期化し、health failure
+    または完了 cycle 0件の bounded `end` は health/tools/workers を含めずゼロ値を返す。
+  - watcher の complete 条件を expected/observed symbol+timeframe 一致、usable quote、
+    `study_filter: "DT "` 成功（0件可）、OHLCV summary true/count20、current-cycle tool
+    response 由来の fresh ISO-8601 timestamp の全成立へ強化。不成立は
+    `snapshot_failed` として registry 前に停止。
+  - judgement は final-line の expected id / shape / exact object をすべて検証した
+    `verified=true` だけを `journal_status=appended` / `status=completed` として summary
+    加算。失敗は planned id 付き `journal_failed`、加算・削除・書換・再試行なしで
+    live judgement を停止。
+  - `tests/pair_trader_contract.test.js` を追加し、`test:unit` に1回だけ登録。Node built-in
+    のみで exact tools、state mapping、snapshot、journal gate、bounded zero end、
+    gpt-5.6-sol/high と `--write` 不在を実ファイルから検査。
+  - validation: contract test 6/6 PASS、manifest package-gates PASS、frontmatter YAML
+    6 files PASS（`._*` 除外）、`git diff --check` PASS。指定 focused `node --test`
+    では contract file は PASS、既存 manifest の nested Node `spawnSync` が managed
+    sandbox の `EPERM` で1件のみ実行不能（契約/selection assertion の失敗ではない）。
+    Node 18 の既知・無関係な MockTimers API 差は `tests/batch.test.js` で25件中1件
+    failure（object 引数ではなく Array が必要）として再確認し、本 lane では未修正。
+- Runtime contract repair lane（2026-07-16）— OFFLINE PASS、live re-smoke pending:
+  - 0.5.3 smoke で、command contract Read 後に health より先に agent markdown / registry
+    を Read。health unavailable は正しく `health_failed` になったが、final が prose/fence
+    付きで `required_cycle_id` / `required_cycle_seq` / `session_summary` / `note` を出し、
+    `action` を欠いたため plugin が `structured_contract_failure` で fail closed した。
+  - bounded `start|next` は command contract のみ Read → exact zero summary 初期化・resume
+    値の in-memory 検証 → 次の tool を fresh
+    `mcp__tradingview__tv_health_check` に固定。health 成功前の agent/registry/chart state
+    Read、Agent、他 MCP を禁止し、agent markdown は事前 Read せず exact subtype で委譲。
+    bounded `end` は resumed context のみを使う zero-Read/zero-tool 経路に分離。
+  - bounded final は13 exact keys の raw JSON object 1個に固定。input-only alias を output
+    `cycle_id` / `cycle_seq` に写し、`session_summary` / `note` と prose/fence/extra field を禁止。
+    nested `summary` は nonnegative counts、count sum、unique ids、id length の不変条件を固定。
+  - validation: focused contract 8/8 PASS、manifest classification/package gates 11/11 PASS、
+    Pair-Trader agent frontmatter exact tools 5/5 PASS、stale refs 0、diff whitespace PASS。
+    full manifest は 11/12 で、残る1件は managed sandbox が nested
+    `/home/yukio/.hermes/node/bin/node` を `spawnSync ... EPERM` で拒否した既知の環境 residual。
+    live TradingView / Claude、journal append、commit、push は未実施。
+- スモーク検証（2026-07-15、commit ca1b88f 後）:
+  - market-watcher: MCP 未接続環境で fail-path PASS（テンプレート遵守・データ捏造
+    なし・MTF 全 unknown 報告）。
+  - journal-scribe: 不正レコード（verdict enum 違反 + score≠breakdown 合計）を
+    正しく 2 件とも検出し書き込みゼロで拒否。journal 内容差分ゼロを git で確認。
+  - CDP (localhost:9222) は HTTP 000 — TradingView Desktop 未起動。
+- Ubuntu Hermes 統合（2026-07-15、追加契約）:
+  - 運用経路は Ubuntu Hermes/Fern orchestrator → Hermes `pair_trader_cycle` →
+    Claude Code execution hub → project subagents → setup/risk の公式
+    `codex@openai-codex` companion（gpt-5.6-sol/high）。
+  - companion は `installed_plugins.json` の `codex@openai-codex` 有効 installPath
+    から動的解決し、無効・path/script 不在時は fail closed。
+  - Ubuntu の Claude MCP `tradingview` は `/usr/bin/node
+    /home/yukio/Coding/tradingview-mcp/src/server.js` で登録済みで、`claude mcp list`
+    は connected を報告済み。ただしこれは登録・接続一覧の証拠に限られ、live
+    CDP/TradingView health と `/pair-session` 実走は未証明。
+- 未実施（ライブ実走の前提条件）:
+  1. TradingView Desktop を CDP (port 9222) 付きで起動し、live health を確認。
+  2. 新セッションで `/pair-session <symbol>` を実走し、read-only watcher、
+     registry gate、companion delegation の end-to-end 動作を確認。
 
 
 ## Side project: quant-github-atlas (2026-07-07) — COMPLETED
@@ -42,7 +117,9 @@ Last updated: 2026-07-15
 ### Audit / hardening stream (2026-07-12)
 
 - Branch `codex/tradingview-audit-hardening` contains the hardening intent
-  commits from the 2026-07-08 baseline and is synchronized with `fork`.
+  commits from the 2026-07-08 baseline. At this revision start it was 1 commit
+  ahead of `fork/codex/tradingview-audit-hardening`, with uncommitted Pair-Trader
+  contract changes; it is not synchronized with `fork`.
 - P1-01 through P1-06 operational hardening is committed in separate intent
   groups. The remaining baseline raw CDP calls are P2 notes outside the
   accepted P1 paths.
