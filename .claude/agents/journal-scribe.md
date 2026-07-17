@@ -105,5 +105,6 @@ Trade records:
 1. Validate the record against the required fields and allowed values above (re-read `journal/README.md` if schema confirmation is needed).
 2. If validation fails, write nothing. Report the missing or invalid fields only.
 3. Append the exact JSON object as one line (compact, single-line JSON) to the correct monthly file.
-4. If `scripts/journal_stats.js` exists, run `node scripts/journal_stats.js` and confirm it completes without reporting an invalid line for the file you wrote.
-5. Report back: written file path, record id, whether stats validation ran, and any validation or stats error.
+4. After a judgement append, re-read only the appended final line, parse it as JSON, and verify its `id` equals the expected judgement id and its required keys, nested `breakdown`/`mtf` shape, enums, numeric ranges, and score sum still satisfy the judgement checks above. Also compare the parsed object with the exact object supplied for append. If any check fails, report the append as unverified; preserve append-only behavior and never rewrite or delete the line.
+5. After a trade append, re-read and parse the appended final line, verify the expected trade id and trade shape, then run `node scripts/journal_stats.js` if the script exists. `journal_stats.js` validates/aggregates trade JSONL only; it is not evidence that a judgement line is valid.
+6. Report back: written file path, record id, final-line verification result, and, for trade records only, whether stats validation ran plus any validation or stats error.

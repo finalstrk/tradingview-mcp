@@ -1,9 +1,9 @@
 # DT Pair-Trader Layer
 
 The DT Pair-Trader layer is a realtime operations layer on top of the existing
-DT trading system: the 68 TradingView MCP tools, the journal evidence layer,
-and the `journal/registry.json` adoption gate. It helps the human trader
-evaluate a live setup while it is forming.
+DT trading system: the 78 currently registered TradingView MCP tools, the
+journal evidence layer, and the `journal/registry.json` adoption gate. It helps
+the human trader evaluate a live setup while it is forming.
 
 It is decision support only. It does not place orders, execute trades, manage
 positions, or move funds. The human remains the trader. Claude Code acts as the
@@ -31,14 +31,25 @@ loop with stricter cost control and clearer division of responsibility.
 
 ## Architecture
 
-The design uses three tiers so the main session stays small while expensive
-reasoning is reserved for the few moments that need it.
+The Ubuntu operational path is:
+
+```text
+Hermes/Fern orchestrator
+  -> Hermes pair_trader_cycle
+  -> Claude Code pair-trader-orchestrator
+  -> project subagents
+  -> official codex@openai-codex companion for setup/risk analysis
+```
+
+The design uses three tiers inside the Claude Code execution hub so the main
+session stays small while expensive reasoning is reserved for the few moments
+that need it.
 
 | Tier | Runtime | Role | Data boundary |
 | --- | --- | --- | --- |
-| Orchestration tier | Main session, Fable/Opus model | Plans, delegates, integrates, and presents the final `GO`, `WAIT`, or `NO-GO` decision support output. | Never pulls raw MCP data directly. It receives compact worker outputs and decides what to ask next. |
+| Orchestration tier | Ubuntu Hermes/Fern and Hermes `pair_trader_cycle`, entering `claude --agent pair-trader-orchestrator` | Executes exactly one bounded `start`, `next`, or `end`; for an eligible adopted signal, Claude integrates and presents `GO`, `WAIT`, or `NO-GO`. | The invocation plugin's `--tools` limits built-in tools. Verified agent frontmatter defines the exact MCP and subagent capability boundary. The parent has no Bash or raw quote/data tools. |
 | Worker tier | 4 subagents, Sonnet | Performs MCP reads, compact market summarization, journal reads/writes, registry checks, and Codex handoff. | Reads only the data needed for the current step. Emits compact structured output. |
-| Heavy reasoning tier | Codex CLI delegation, `gpt-5.6-sol`, reasoning effort `high` | Performs setup analysis, scenario building, and adversarial risk critique. | Analysis-only contract: prompt-enforced no-file-write rule plus before/after triple-hash comparison (status, diff HEAD, untracked contents; the outer Claude Code sandbox is the boundary). |
+| Heavy reasoning tier | Official `codex@openai-codex` Claude Code companion, `gpt-5.6-sol`, reasoning effort `high` | Performs setup analysis, scenario building, and adversarial risk critique. | `task --fresh` without `--write` selects a read-only Codex task sandbox. The prompt no-file-write sentence and before/after triple-hash comparison remain defense in depth. |
 
 The orchestration tier owns the session state and final presentation. The worker
 tier owns narrow tasks. The heavy reasoning tier is used only when a setup is
@@ -47,6 +58,30 @@ eligible and the session needs deeper analysis than a compact worker response.
 ## Agents
 
 Agent definitions live under `.claude/agents/`. Each agent has a narrow contract.
+The `tools` list in verified agent frontmatter determines which tools are available
+to that agent. `allowedTools` preapproves permissions for listed calls; it does not
+define tool availability and must not be described as the capability boundary.
+
+### `pair-trader-orchestrator`
+
+`pair-trader-orchestrator` is the main thread for bounded automation and is
+intended for `claude --agent pair-trader-orchestrator`.
+
+Its only tools are `Read`,
+`Agent(market-watcher, setup-analyst, risk-officer, journal-scribe)`, and the five
+startup/control/capture MCP tools `tv_health_check`, `chart_set_symbol`,
+`chart_set_timeframe`, `chart_get_state`, and `capture_screenshot` (all with the
+`mcp__tradingview__` prefix). It has no Bash, quote/data, edit/write, UI, replay,
+alert, drawing, or Pine tool.
+
+For bounded `start` or `next`, MAIN first Reads only the command contract,
+initializes the zero summary in memory, and MUST make
+`mcp__tradingview__tv_health_check` the very next tool call. `next` uses a fresh
+health check before any Watch Cycle read. Until health succeeds, MAIN cannot Read
+agent markdown, registry, chart state, or any other file, and cannot call Agent or
+another MCP tool. Agent definitions are already runtime-loaded, so MAIN never
+pre-reads them and delegates by exact Agent subtype only after the gate. Bounded
+`end` uses resumed memory and performs no Read or tool call.
 
 ### `market-watcher`
 
@@ -59,6 +94,15 @@ Responsibilities:
   payload: `DT|<setup_id>|<dir>|<state>|entry=...|sl=...|tp1=...|tp2=...`.
 - Use compact OHLCV summaries, not raw bar dumps, unless explicitly requested.
 - Emit a compact market snapshot of about 1 KB.
+- Emit `snapshot_status: complete|incomplete`. Complete requires the observed
+  symbol/timeframe to match the orchestrator's expected chart context, a usable
+  current quote, a successful DT-label read with `study_filter: "DT "`, a
+  successful OHLCV `summary: true` / `count: 20` read, and a fresh ISO-8601
+  timestamp observed in a current-cycle tool response. Zero matching labels is
+  allowed and yields `no_signal`.
+- Treat any missing, stale, mismatched, or unusable required result as incomplete.
+  Never fabricate the timestamp. Missing optional tables, lines, or study values
+  may be reported without inventing facts.
 
 Output rules:
 
@@ -66,6 +110,7 @@ Output rules:
 - No trade opinion.
 - No `GO`, `WAIT`, or `NO-GO`.
 - No registry adoption judgement.
+- An incomplete snapshot cannot enter registry gating or judgement.
 
 ### `setup-analyst`
 
@@ -75,7 +120,7 @@ Responsibilities:
 
 - Identify the active DT setup signal from the snapshot.
 - Call Codex with reasoning effort `high` for scenario building when the setup
-  is eligible for analysis.
+  is adopted and its state is `forming|triggered`.
 - Return structured analysis with:
   - `thesis`
   - `invalidation`
@@ -89,6 +134,11 @@ Responsibilities:
 The agent does not decide whether the trade is allowed. It explains the setup
 case and the conditions under which the case fails.
 
+The orchestrator invokes this agent only for an adopted `forming` or `triggered`
+signal. A defensive `NOT-ELIGIBLE` response from the worker means orchestration
+drift and is not the main state mapping: a signal state outside
+`forming|triggered` maps to `no_signal` before worker invocation.
+
 ### `risk-officer`
 
 `risk-officer` performs an independent adversarial review.
@@ -97,6 +147,8 @@ Responsibilities:
 
 - Check `journal/registry.json` before live judgement.
 - Confirm that the setup x market combination has `status: "adopted"`.
+- Confirm that the signal state is `forming` or `triggered` before any companion
+  call.
 - Review risk/reward, session fit, and recent track record.
 - Challenge the setup case without relying on `setup-analyst` conclusions.
 - Draft a judgement breakdown matching the schema in `journal/README.md`:
@@ -115,7 +167,9 @@ Responsibilities:
 - Draft a verdict candidate: `GO`, `WAIT`, or `NO-GO`.
 
 The main session integrates this draft with the setup analysis. The
-`risk-officer` does not execute the trade and does not write journal lines.
+`risk-officer` does not execute the trade and does not write journal lines. It is
+invoked only for adopted `forming|triggered` signals; its defensive
+`NOT-ELIGIBLE` sentinel is an orchestration-drift stop, not a no-signal state.
 
 ### `journal-scribe`
 
@@ -127,6 +181,10 @@ Responsibilities:
 - Append one trade line to `journal/trades/YYYY-MM.jsonl` after the human reports
   the execution result.
 - Link trade records to judgement records with `judgement_id` when available.
+- After a judgement append, re-read and parse the final line and verify the
+  expected id, judgement shape, and equality with the exact object supplied.
+  Report `verified=true` only when all checks pass. Run `journal_stats.js` only
+  after trade appends; it does not validate judgement JSONL.
 
 Write rules:
 
@@ -144,30 +202,64 @@ Entrypoint:
 /pair-session <symbol> [timeframe]
 ```
 
+Before any health, chart, or registry operation, initialize the in-memory summary
+to `{"judgement_count":0,"verdict_counts":{"GO":0,"WAIT":0,"NO-GO":0},"judgement_ids":[]}`.
+
+Bounded Hermes invocation supplies exactly one action. `start` performs Startup
+and one Watch Cycle, `next` performs a fresh health gate and one Watch Cycle, and
+both return without interactive Loop Control. `end` returns the final object with
+the accumulated summary from resumed memory, without a Read, health check,
+chart/registry call, worker, screenshot, journal write, or extra cycle. A bounded
+`end` after a health failure or zero completed cycles returns the exact zero
+summary without health/tool/worker output. A direct human `/pair-session`
+invocation may still offer interactive Loop Control.
+
+Every bounded final response is one raw JSON object only, with no prose, heading,
+markdown fence, alias, or extra field. Its exact keys are `action`, `cycle_id`,
+`cycle_seq`, `status`, `cycle_completed`, `health`, `snapshot_status`,
+`registry_status`, `journal_status`, `judgement_id`, `analysis_mode`, `ended`, and
+`summary`. The input-only names `required_cycle_id` and `required_cycle_seq` map to
+`cycle_id` and `cycle_seq`; `session_summary` and `note` are forbidden. Nested
+`summary` has exactly `judgement_count`, exact verdict counts `GO`/`WAIT`/`NO-GO`,
+and unique nonempty `judgement_ids`. All counts are nonnegative; verdict counts
+and id length both equal `judgement_count`. Fresh failed `start` is exact zero;
+resumed `next` or `end` may carry only valid accumulated values.
+
 Flow:
 
-1. Run `tv_health_check`.
+1. For bounded `start` or `next`, after the sole command-contract Read and zero
+   summary initialization, run a fresh `mcp__tradingview__tv_health_check` as the
+   very next tool call. Do not pre-read agents, registry, or chart state.
 2. If TradingView is not reachable, stop and tell the user that `tv_launch` can
    start it (do not auto-launch); re-run `tv_health_check` after the user
    confirms, and only proceed once it passes.
-3. Run `market-watcher` to collect a compact snapshot for the symbol and
-   timeframe.
-4. If no DT setup signal is present, report the market state and continue the
-   loop.
-5. If a DT setup signal is present, check whether the setup x market combination
-   is adopted in `journal/registry.json`.
-6. If the setup is not adopted, route to `/setup-verify` or `/replay-drill`.
-   Do not produce a live trade judgement.
+3. Run `market-watcher` to collect a compact snapshot for the expected symbol and
+   timeframe. An incomplete snapshot maps to `snapshot_failed` and stops before
+   registry, analysis, screenshot, and journal work.
+4. If zero matching DT labels are returned, or every signal state is outside
+   `forming|triggered`, return `no_signal` and continue the interactive loop or
+   return in bounded mode. This is not `NOT-ELIGIBLE`.
+5. Only for an actual `forming` or `triggered` signal, check whether the setup x
+   market combination is adopted in `journal/registry.json`.
+6. If that forming/triggered setup is non-adopted, map it to
+   `live_ineligible` / `NOT-ELIGIBLE` and route to `/setup-verify` or
+   `/replay-drill`. Do not produce a live verdict, screenshot, judgement record,
+   or setup/risk companion call.
 7. If the setup is adopted, run `setup-analyst` and `risk-officer` in parallel.
 8. The main session integrates the setup case, adversarial review, registry
    status, RR, session fit, and track record into one decision support output:
    `GO`, `WAIT`, or `NO-GO`.
 9. The human trader decides whether to execute manually.
 10. `journal-scribe` records the judgement in
-    `journal/judgements/YYYY-MM.jsonl`.
+    `journal/judgements/YYYY-MM.jsonl`. Only final-line `verified=true` with the
+    expected id, valid shape, and exact object match permits
+    `journal_status=appended`, `status=completed`, and summary increment.
 11. After the human reports the result, `journal-scribe` records the trade in
     `journal/trades/YYYY-MM.jsonl` and links it with `judgement_id`.
 12. Repeat the loop until the session ends.
+
+Step 12 applies only to a direct interactive session. A bounded Hermes call
+always returns after its single action.
 
 The pair session is not a signal firehose. It should wait for an adopted DT setup
 signal, produce one clear judgement, record the evidence, and then return to
@@ -175,39 +267,64 @@ watching.
 
 ## Codex Delegation
 
-`setup-analyst` and risk review workflows may delegate heavy analysis to Codex
-when deeper scenario work is needed.
+`setup-analyst` and `risk-officer` delegate heavy analysis through the enabled
+official `codex@openai-codex` Claude Code companion when deeper scenario work is
+needed.
 
 Invocation contract:
 
 ```bash
-CODEX_BIN=/Users/yukio/bin/codex bash ~/.claude/scripts/codex-from-claude.sh exec --skip-git-repo-check --cd "<repo>" --model gpt-5.6-sol -c 'mcp_servers={}' -c 'model_reasoning_effort="high"' -- "<request>"
+cd "$(git rev-parse --show-toplevel)" || exit 1
+/usr/bin/node "$COMPANION" task --fresh --model gpt-5.6-sol --effort high -- "$prompt"
 ```
 
-The model is `gpt-5.6-sol` at reasoning effort `high` (replaced `gpt-5.5` `xhigh`
-on 2026-07-15). `CODEX_BIN` must point at the newer Codex binary; the wrapper
-otherwise prefers an older nvm-installed Codex that rejects gpt-5.6-sol.
+`$COMPANION` is not a version-pinned path. Both analysis agents resolve it from
+`~/.claude/plugins/installed_plugins.json`, key `codex@openai-codex`, after
+confirming that the plugin is enabled in `~/.claude/settings.json`. Resolution
+fails closed if the enabled entry, its `installPath`, or
+`scripts/codex-companion.mjs` is absent. The full copyable resolver is kept in
+both agent definitions.
+
+The model is `gpt-5.6-sol` at reasoning effort `high`. `task --fresh` prevents
+reuse of an earlier analysis thread. Omitting `--write` makes the official
+companion request a read-only Codex task sandbox.
 
 Delegation rules:
 
-- Codex receives the compact market snapshot and the specific analysis request.
-- The wrapper bypasses Codex's internal sandbox; the outer Claude Code sandbox is
-  the effective boundary.
-- MCP servers are disabled with `mcp_servers={}`.
-- Codex drafts and analyzes only. Every prompt must end with: "Output analysis
-  text only. Do not create, modify, or delete any files."
-- Before and after each call, capture three hashes: `git status --porcelain=v1
-  -uall | shasum`, `git diff HEAD | shasum`, and `git ls-files --others
-  --exclude-standard -z | xargs -0 shasum 2>/dev/null | shasum` (untracked
-  contents); any difference means contamination — discard the Codex output,
-  report it, and stop.
+- Orchestration gates run before delegation. An incomplete snapshot returns
+  `snapshot_failed`; a signal state outside `forming|triggered` returns
+  `no_signal`; only a forming/triggered non-adopted setup returns
+  `live_ineligible` / `NOT-ELIGIBLE`. None resolves or invokes the companion.
+- The workers' own eligibility checks remain defense in depth. A defensive
+  `NOT-ELIGIBLE` worker response after delegation means orchestration drift and
+  cannot become a live verdict.
+- Each worker assigns the exact supplied snapshot, parsed signal, registry
+  excerpt/status, and stats excerpt inside its Bash workflow. Risk also assigns
+  its computed RR facts and relevant trade excerpt.
+- `$prompt` is the exact string built from those assigned values and the focused
+  task instruction; its final text is exactly: "Output analysis text only. Do
+  not create, modify, or delete any files."
+- The companion call runs from the repository root in analysis-only, read-only
+  mode with the supported syntax `task --fresh --model gpt-5.6-sol --effort
+  high`; no `--write` and no output-format flag.
+- Before and after each call, capture three SHA-256 fingerprints: `git status
+  --porcelain=v1 -uall`, `git diff --binary HEAD`, and the names plus contents of
+  files returned by `git ls-files --others --exclude-standard -z`; any
+  difference means contamination — discard the Codex output, report it, and
+  stop. The exact `sha256sum` helper is copied into both analysis agents.
 - Codex output must be treated as analysis, not as execution authority.
+- Success prints the actual output with `printf '%s\n' "$output"` and sets
+  `analysis_mode: codex`. Timeout, nonzero status, fingerprint failure or
+  mismatch, and empty output are discarded; the Sonnet worker performs a
+  best-effort analysis with `analysis_mode: degraded` and the required visible
+  degraded wording.
 
 Expected setup analysis fields (matching the `setup-analyst` fixed template):
 
 ```json
 {
   "thesis": "string",
+  "analysis_mode": "codex | degraded",
   "invalidation": "string",
   "mtf_alignment": "string (per-timeframe D/60/15/5; unknown allowed)",
   "level_quality": "string",
@@ -229,6 +346,14 @@ Non-adopted setup routes:
 - `insufficient_data`: route to `/setup-verify` or `/replay-drill`.
 - `rejected`: do not trade as a live DT setup.
 - `retired`: do not trade as a live DT setup.
+
+Every route above is `live判定対象外` / `NOT-ELIGIBLE`, not live `NO-GO`.
+`GO`, `WAIT`, and `NO-GO` remain the complete live-verdict enum, used only for
+adopted signals in `forming|triggered`.
+
+Signal-state routing is separate: any state outside `forming|triggered` is
+`no_signal`, not `NOT-ELIGIBLE`. Only an actual `forming` or `triggered` signal
+whose setup x market is non-adopted is `live_ineligible` / `NOT-ELIGIBLE`.
 
 Execution boundary:
 
@@ -263,18 +388,21 @@ MCP context rules:
 
 ## Known Limitations
 
-- **Tool-name enforcement is deferred to first live run.** `market-watcher`
-  restricts mutations via `disallowedTools`, but if the TradingView MCP server
-  registers tools with an `mcp__<server>__` prefix, the bare-name entries will
-  not match. Verify the effective tool names on the first live `/pair-session`
-  run and mirror the denylist entries with the real prefix.
-- **Bash access is not command-restricted.** `setup-analyst`, `risk-officer`,
-  and `journal-scribe` need Bash (Codex wrapper, git verification, JSONL
+- **Live TradingView behavior is still unproven.** On Ubuntu the Claude MCP server
+  name is `tradingview`, and `market-watcher` uses a strict allowlist of the
+  required `mcp__tradingview__...` read tools. MCP registration and a connected
+  listing do not prove live CDP/TradingView health or a successful
+  `/pair-session` cycle.
+- **Child Bash is a residual boundary.** `setup-analyst`, `risk-officer`,
+  and `journal-scribe` need Bash (Codex companion, git verification, JSONL
   append), and Claude Code agent frontmatter cannot express per-command
-  allowlists. The no-order / append-only boundaries are enforced by
-  instructions, the contamination checks, and the outer Claude Code sandbox —
-  not by tooling. Hook-based enforcement (PreToolUse command validation) is a
-  planned hardening step.
+  allowlists. The plugin `--tools` limits built-in tools; verified agent
+  frontmatter supplies the exact MCP and subagent capability boundary, while
+  `allowedTools` only preapproves permissions. None of these restricts individual
+  commands inside a child worker's Bash call. The no-order / append-only
+  boundaries there remain instructional plus contamination checks. This child
+  worker's Bash access remains residual; it does not provide hard no-order
+  enforcement. Hook-based command validation is a planned hardening step.
 - **Contamination detection is best-effort.** The triple-hash check covers
   tracked diffs, status, and untracked contents, but a hostile process could
   still race it. The layer never grants Codex execution authority, so the blast
@@ -290,8 +418,7 @@ Rules:
 - Do not stream raw MCP payloads into the main session.
 - Keep `market-watcher` snapshots around 1 KB.
 - Prefer compact facts over prose.
-- Use Codex delegation only after an adopted setup signal is present or when an
-  explicit adversarial review is requested.
+- Use Codex delegation only for an adopted signal in `forming|triggered`.
 - Do not call Pine graphics tools without `study_filter` when the target study is
   known.
 - Do not pull full OHLCV bars when `summary: true` is enough.
@@ -330,20 +457,21 @@ Handling:
 
 Do not infer chart state from stale notes or previous screenshots.
 
-### Codex CLI delegation fails
+### Codex companion delegation fails
 
 Symptoms:
 
-- The Codex wrapper command fails.
+- The active companion cannot be resolved or its command fails.
 - The command times out.
-- The output is empty or malformed.
+- The output is empty.
 
 Handling:
 
 1. Continue the session without Codex if the market snapshot and registry check
    are available.
-2. `setup-analyst` degrades to Sonnet-only analysis.
-3. The output must explicitly state degraded mode.
+2. The affected setup/risk worker degrades to Sonnet-only best-effort analysis.
+3. Propagate that worker's `analysis_mode: degraded` and exact notice through
+   synthesis.
 
 Required wording in the judgement output:
 
@@ -351,10 +479,16 @@ Required wording in the judgement output:
 Degraded mode: Codex delegation failed; setup analysis was completed by the Sonnet worker only.
 ```
 
+For risk delegation failure, use:
+
+```text
+Degraded mode: Codex delegation failed; risk analysis was completed by the Sonnet worker only.
+```
+
 Do not hide the failure. Do not present degraded analysis as equivalent to the
 normal heavy reasoning path.
 
-### Journal write fails
+### Journal write or final-line verification fails
 
 Symptoms:
 
@@ -362,14 +496,18 @@ Symptoms:
 - `journal-scribe` cannot append to `journal/trades/YYYY-MM.jsonl`.
 - The target directory or file is unavailable.
 - JSON serialization fails.
+- The final line has the wrong id or shape, differs from the exact supplied
+  object, or is not reported with `verified=true`.
 
 Handling:
 
-1. Stop further journal writes.
-2. Report the target path and operation that failed.
-3. Show the record that was intended to be appended.
-4. Ask the human to resolve the file or permission issue before continuing live
-   judgement.
+1. Return `journal_failed` with the planned judgement id and do not increment the
+   session summary.
+2. Stop further live judgements until the journal is repaired.
+3. Report the target path, operation/check that failed, and the record intended
+   for append.
+4. Preserve append-only behavior: do not delete, rewrite, or retry the final line.
+5. Ask the human to resolve the journal issue before continuing live judgement.
 
 Do not silently keep an in-memory judgement as if it were recorded. If the
 judgement cannot be written, the session must treat the evidence layer as
