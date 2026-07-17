@@ -2,7 +2,25 @@
 
 Last updated: 2026-07-17
 
-## Scalping verification round 2 + intraday_momo_pure (2026-07-18)
+## Scalping verification round 2 + intraday_momo_pure (2026-07-18) — COMPLETE
+
+- `intraday_momo_pure` ablation 検証（futures + fx、15分足 n=133-151）: **両市場 rejected**。
+  ablation 仮説は**反証**: 先物では pure が全銘柄で overlay 版より悪化
+  （ΔPF -0.08〜-0.18、ΔWR -2.7〜-4.6pp、n 完全一致のペア比較）。SL/TP オーバーレイは
+  エッジを削っていたのではなく損失を緩和していた。fx は sizing 差で記述的比較に留まるが
+  PF 0.19-0.57 帯で同様に fail。Codex (gpt-5.6-sol high) レビューで判定整合・比較方向を
+  確認（full-sample tail 未検証と ES/NQ/YM 非独立性は caveat として registry notes 記録）。
+  証跡14本。復元検証済み。
+- **最終結論**: 検証した全 setup × 市場（momo fx/futures、noise_break stocks_us、
+  vwap_rsi_pullback stocks_us、momo_pure fx/futures = 計8組）が rejected、
+  torb futures が insufficient_data。adopted 0件。intraday momentum 系は
+  overlay 有無に関わらずこの環境・データでは不成立と結論。
+- 残る未検証: torb（先物 RT データ契約待ち）、noise_break/vwap_rsi_pullback の
+  fx・futures・stocks_jp、全 setup の stocks_jp。ただし全ファミリーの evidence が
+  弱い現状では、新規検証より新しいエッジ仮説の発掘を推奨。
+- MCP バグ追加知見: pine ツールの Monaco 検出は `getEditors()[0]` が hidden
+  pre-warmed instance を掴む。`getDomNode() === container` 照合での修正を推奨
+  （既起票の pine editor バグタスクに該当、別セッションで修正中）。
 
 - setup-verify 実施結果（stocks_us、BATS:* 解決を証跡記録）:
   - `noise_break` / stocks_us: **rejected**。5分足 n=379-402 で PF 0.87-1.14 / WR 21-25%。

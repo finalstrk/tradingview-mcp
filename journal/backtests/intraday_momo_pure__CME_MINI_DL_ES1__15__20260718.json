@@ -1,0 +1,31 @@
+{
+  "setup": "intraday_momo_pure",
+  "symbol": "CME_MINI_DL:ES1!",
+  "requested_symbol": "CME_MINI:ES1!",
+  "market": "futures",
+  "tf": "15",
+  "date": "2026-07-18",
+  "period": {
+    "from": "2025-08-31T22:00:00.000Z",
+    "to": "2026-07-17T16:15:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "disasterStopAtrMult": 0.0,
+    "sizingMode": "Fixed quantity",
+    "fixedQty": 1,
+    "commission_pct": 0.005,
+    "slippage_ticks": 2
+  },
+  "trades": 151,
+  "winrate": 0.317881,
+  "winrate_pct": 31.79,
+  "pf": 0.355947,
+  "max_dd_pct": 3.03,
+  "net_profit_pct": -2.98,
+  "avg_trade": -197.310422,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "wr>=45&pf>=1.3 | wr>=35&pf>=1.6; maxDD<=15",
+  "notes": "Ablation pure variant. n=151 sufficient. Fails both WR and PF thresholds. Ablation vs intraday_momo (overlay, rejected, PF0.531/WR36.42%/DD1.99% on this symbol/tf): pure variant is WORSE (PF delta -0.175, WR delta -4.63pp, DD delta +1.04pp). Removing the SL/TP overlay did not recover the published edge."
+}

@@ -1,0 +1,31 @@
+{
+  "setup": "intraday_momo_pure",
+  "symbol": "CME_MINI_DL:NQ1!",
+  "requested_symbol": "CME_MINI:NQ1!",
+  "market": "futures",
+  "tf": "15",
+  "date": "2026-07-18",
+  "period": {
+    "from": "2025-08-31T22:00:00.000Z",
+    "to": "2026-07-17T16:30:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "disasterStopAtrMult": 0.0,
+    "sizingMode": "Fixed quantity",
+    "fixedQty": 1,
+    "commission_pct": 0.005,
+    "slippage_ticks": 2
+  },
+  "trades": 150,
+  "winrate": 0.38,
+  "winrate_pct": 38.0,
+  "pf": 0.514162,
+  "max_dd_pct": 4.26,
+  "net_profit_pct": -4.14,
+  "avg_trade": -276.181757,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "wr>=45&pf>=1.3 | wr>=35&pf>=1.6; maxDD<=15",
+  "notes": "Ablation pure variant. n=150 sufficient. Fails WR/PF thresholds (WR38% needs PF>=1.6, actual PF0.514). Ablation vs intraday_momo (overlay, rejected, PF0.653/WR42.0%/DD2.77% on this symbol/tf): pure variant is WORSE (PF delta -0.139, WR delta -4.0pp, DD delta +1.49pp)."
+}

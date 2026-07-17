@@ -1,0 +1,31 @@
+{
+  "setup": "intraday_momo_pure",
+  "symbol": "CBOT_MINI_DL:YM1!",
+  "requested_symbol": "CBOT_MINI:YM1!",
+  "market": "futures",
+  "tf": "5",
+  "date": "2026-07-18",
+  "period": {
+    "from": "2026-04-05T22:00:00.000Z",
+    "to": "2026-07-17T16:30:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "disasterStopAtrMult": 0.0,
+    "sizingMode": "Fixed quantity",
+    "fixedQty": 1,
+    "commission_pct": 0.005,
+    "slippage_ticks": 2
+  },
+  "trades": 49,
+  "winrate": 0.285714,
+  "winrate_pct": 28.57,
+  "pf": 0.433885,
+  "max_dd_pct": 0.58,
+  "net_profit_pct": -0.5,
+  "avg_trade": -101.37552,
+  "currency": "USD",
+  "verdict": "insufficient_data",
+  "criteria": "wr>=45&pf>=1.3 | wr>=35&pf>=1.6; maxDD<=15",
+  "notes": "Ablation pure variant. Requested exchange symbol resolved to delayed CBOT_MINI_DL feed. 5m tester history -> n<100."
+}

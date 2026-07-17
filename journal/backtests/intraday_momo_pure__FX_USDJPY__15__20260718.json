@@ -1,0 +1,32 @@
+{
+  "setup": "intraday_momo_pure",
+  "symbol": "FX:USDJPY",
+  "market": "fx",
+  "tf": "15",
+  "date": "2026-07-18",
+  "period": {
+    "from": "2025-08-31T21:30:00.000Z",
+    "to": "2026-07-17T16:30:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "sessionPreset_note": "RTH and NY presets resolve to the identical session string (0930-1600 America/New_York) in this Pine script, so this run is functionally equivalent to the requested NY preset.",
+    "disasterStopAtrMult": 0.0,
+    "sizingMode": "Fixed quantity",
+    "fixedQty": 1,
+    "commission_pct": 0.005,
+    "slippage_ticks": 2,
+    "sizing_caveat": "Fixed quantity=1 unit on FX pairs is trivially small notional relative to the $1,000,000 default account, so max_dd_pct and net_profit_pct round to ~0.00% and are NOT meaningful for the maxDD<=15% criterion on FX under this sizing. winrate and profit_factor are ratio metrics computed from per-trade returns and are unaffected by this sizing choice, so they remain the meaningful basis for the pass/fail verdict here. Kept as instructed (do not switch sizing mode for FX); recorded verbatim as an evidence caveat."
+  },
+  "trades": 150,
+  "winrate": 0.286667,
+  "winrate_pct": 28.67,
+  "pf": 0.364174,
+  "max_dd_pct": 0,
+  "net_profit_pct": 0,
+  "avg_trade": null,
+  "currency": "JPY",
+  "verdict": "fail",
+  "criteria": "wr>=45&pf>=1.3 | wr>=35&pf>=1.6; maxDD<=15",
+  "notes": "Ablation vs intraday_momo (overlay, rejected, PF0.367/WR36.11%/DD0.24% on this symbol/tf, percent_of_equity 10% sizing): pure variant PF is roughly flat (delta -0.003) but WR is worse (delta -7.44pp). Sizing regimes differ (fixed qty=1 here vs percent_of_equity there); PF/WR are trade-return ratios and remain comparable, maxDD is not (see sizing_caveat)."
+}

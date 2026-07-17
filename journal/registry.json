@@ -659,26 +659,44 @@
       "status": "candidate",
       "markets": {
         "fx": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "5",
             "15"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null,
-          "notes": "Ablation variant of intraday_momo (rejected here): no SL/TP overlay, EOD-only exit per the source studies. Compare against intraday_momo evidence to isolate the overlay's impact."
+          "evidence": [
+            "journal/backtests/intraday_momo_pure__FX_USDJPY__5__20260718.json",
+            "journal/backtests/intraday_momo_pure__FX_USDJPY__15__20260718.json",
+            "journal/backtests/intraday_momo_pure__FX_EURUSD__5__20260718.json",
+            "journal/backtests/intraday_momo_pure__FX_EURUSD__15__20260718.json",
+            "journal/backtests/intraday_momo_pure__FX_GBPUSD__5__20260718.json",
+            "journal/backtests/intraday_momo_pure__FX_GBPUSD__15__20260718.json",
+            "journal/backtests/intraday_momo_pure__FX_AUDUSD__5__20260718.json",
+            "journal/backtests/intraday_momo_pure__FX_AUDUSD__15__20260718.json"
+          ],
+          "bt_winrate": 0.288162,
+          "bt_pf": 0.384268,
+          "notes": "Ablation test result: RTH preset used (functionally identical to NY in this Pine script: both resolve to session string 0930-1600 America/New_York). Disaster stop OFF. Fixed-quantity=1-unit sizing kept per instruction (not switched to percent_of_equity for FX), which makes max_dd_pct/net_profit_pct round to ~0.00% on all four pairs -- non-informative for the maxDD<=15% criterion (passes trivially by construction, not by low risk); WR and PF are per-trade return ratios unaffected by this sizing choice and remain the valid basis for the verdict. 5m n<100 on all four pairs -> insufficient_data. 15m sufficient on all four (n=133-150), all fail on WR/PF alone regardless of the maxDD caveat: USDJPY WR28.67%/PF0.364, EURUSD WR32.09%/PF0.570, GBPUSD WR29.32%/PF0.362, AUDUSD WR25.19%/PF0.241. Majority (4/4) fail -> rejected. Ablation vs intraday_momo (overlay, rejected, percent_of_equity 10% sizing, matched-market but NOT matched-n: overlay n=180/160/145/151 vs pure n=150/134/133/135, so this is a descriptive not paired comparison): PF delta mixed (USDJPY -0.003, EURUSD +0.144, GBPUSD +0.002, AUDUSD +0.053) but WR delta worse on all four (-7.44/-5.41/-3.78/-1.30pp). Net: PF stayed in the same clearly-failing range (0.19-0.57) with or without the overlay -- no adoptable edge surfaces either way. Ablation hypothesis NOT supported on FX (inconclusive-to-negative rather than clearly refuted, given the sizing/trade-count mismatch versus the overlay baseline). Codex adversarial review (gpt-5.6-sol, 2026-07-18) confirmed verdict consistency (WR/PF alone fails all 4 symbols regardless of the maxDD sizing caveat), flagged the FX overlay-vs-pure n mismatch as weakening the ablation comparison to descriptive-only, and flagged commission/slippage double-counting risk (0.005% + 2 ticks per fill, not clearly disclosed as round-trip) as a secondary caveat that does not change the fail verdict since all PF stayed well under 1.0.",
+          "updated": "2026-07-18"
         },
         "futures": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "5",
             "15"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null,
-          "notes": "Primary ablation target: intraday_momo/futures was rejected with the overlay; this variant tests whether removing it recovers the published edge. Fixed 1 contract sizing default (zero-trade trap documented 2026-07-17)."
+          "evidence": [
+            "journal/backtests/intraday_momo_pure__CME_MINI_DL_ES1__5__20260718.json",
+            "journal/backtests/intraday_momo_pure__CME_MINI_DL_ES1__15__20260718.json",
+            "journal/backtests/intraday_momo_pure__CME_MINI_DL_NQ1__5__20260718.json",
+            "journal/backtests/intraday_momo_pure__CME_MINI_DL_NQ1__15__20260718.json",
+            "journal/backtests/intraday_momo_pure__CBOT_MINI_DL_YM1__5__20260718.json",
+            "journal/backtests/intraday_momo_pure__CBOT_MINI_DL_YM1__15__20260718.json"
+          ],
+          "bt_winrate": 0.330405,
+          "bt_pf": 0.395216,
+          "notes": "Ablation test result: RTH preset, disaster stop OFF, Fixed-quantity=1-contract sizing (kept from intraday_momo futures zero-trade-trap fix). Delayed CME_MINI_DL/CBOT_MINI_DL feeds (no realtime license). 5m n<100 on all three symbols -> insufficient_data. 15m sufficient on all three (n=150-151), all fail: ES1! WR31.79%/PF0.356/DD3.03%, NQ1! WR38.00%/PF0.514/DD4.26%, YM1! WR29.33%/PF0.316/DD2.10%. Majority (3/3) fail -> rejected. Ablation vs intraday_momo (overlay, rejected, PF0.531/0.653/0.399 WR36.42/42.0/32.0% on the same symbols/tf, matched n): pure variant is WORSE on every symbol (PF delta -0.175/-0.139/-0.083, WR delta -4.63/-4.00/-2.67pp, DD delta +1.04/+1.49/+0.34pp). Ablation hypothesis REFUTED for futures: removing the SL/TP overlay did not recover the published edge and made results worse; the overlay was mitigating losses, not causing them. Codex adversarial review (gpt-5.6-sol, 2026-07-18) confirmed verdict consistency, flagged cross-symbol non-independence (ES/NQ/YM share US-session shocks -> effective n<3 for the majority vote, though moot since 0/3 pass) and that only a 20-trade (of 151) sample was manually inspected for outlier/tail dependence -- platform maxDD is computed from the full equity curve so the maxDD figures themselves remain valid, but full-sample tail-risk (max single loss, PF excluding top-N trades) was not independently verified.",
+          "updated": "2026-07-18"
         },
         "stocks_us": {
           "status": "candidate",

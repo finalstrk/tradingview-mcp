@@ -1,0 +1,31 @@
+{
+  "setup": "intraday_momo_pure",
+  "symbol": "CME_MINI_DL:ES1!",
+  "requested_symbol": "CME_MINI:ES1!",
+  "market": "futures",
+  "tf": "5",
+  "date": "2026-07-18",
+  "period": {
+    "from": "2026-04-05T22:00:00.000Z",
+    "to": "2026-07-17T16:25:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "disasterStopAtrMult": 0.0,
+    "sizingMode": "Fixed quantity",
+    "fixedQty": 1,
+    "commission_pct": 0.005,
+    "slippage_ticks": 2
+  },
+  "trades": 49,
+  "winrate": 0.326531,
+  "winrate_pct": 32.65,
+  "pf": 0.324045,
+  "max_dd_pct": 1.03,
+  "net_profit_pct": -0.98,
+  "avg_trade": -200.109235,
+  "currency": "USD",
+  "verdict": "insufficient_data",
+  "criteria": "wr>=45&pf>=1.3 | wr>=35&pf>=1.6; maxDD<=15",
+  "notes": "Ablation pure variant (no SL/TP, EOD-only exit, disaster stop OFF). Requested exchange symbol resolved to delayed CME_MINI_DL feed. 5m tester history ~3.4 months -> n<100."
+}
