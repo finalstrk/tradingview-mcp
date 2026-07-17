@@ -1,0 +1,253 @@
+//@version=6
+indicator("DT Noise Area Breakout v1", overlay=true, max_labels_count=50)
+
+// Input groups
+string groupSession = "Session"
+string groupSetup = "Setup"
+string groupRisk = "Risk"
+string groupDisplay = "Display"
+
+// Session inputs
+sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+warmupWindow = input.session("0930-1000", "Warmup window (no entries, first 30 min)", group=groupSession)
+
+// Setup inputs — noise band derived from an average-absolute-daily-move fallback.
+// The source logic (SSRN Noise-Area paper) specifies a per-time-of-day rolling
+// average (average |close_at_this_minute / session_open - 1| over the last N days,
+// tracked separately for every minute-of-session). That requires a matrix keyed by
+// bar-index-of-day x lookback-day, which is fragile in Pine v6 because bar count
+// per session shifts with DST transitions, holiday half-days, and symbol-specific
+// session tables. This implementation instead uses the simpler, more robust
+// fallback the task spec explicitly allows: a single scalar avgAbsMove per day,
+// computed as the average of |session_close / session_open - 1| over the last N
+// completed sessions. The resulting noise band is flat across the session instead
+// of widening intraday — see README for the full tradeoff writeup.
+lookbackDays = input.int(14, "Avg move lookback (days)", minval=3, group=groupSetup)
+minWarmupDays = input.int(5, "Min completed days before signals are valid", minval=1, group=groupSetup)
+noiseMult = input.float(1.0, "Noise band multiplier", minval=0.1, step=0.1, group=groupSetup)
+
+// Risk inputs — TP1/TP2 are a DT overlay on top of the source logic (untested).
+tp1Mult = input.float(1.0, "TP1 distance (x band width)", minval=0.1, step=0.1, group=groupRisk)
+tp2Mult = input.float(2.0, "TP2 distance (x band width, display only)", minval=0.1, step=0.1, group=groupRisk)
+
+// Checkpoint gating — the source logic (family_orderflow.md Candidate 2,
+// citing the Zarattini et al. SSRN working paper) evaluates breakouts only
+// at fixed half-hour decision checkpoints (HH:00 / HH:30 session time), not
+// continuously on every bar close. Default true reproduces that behavior;
+// set to false for an explicitly unvalidated continuous-evaluation variant
+// (no source study backs continuous evaluation — see README).
+checkpointOnly = input.bool(true, "Checkpoint-only entries (HH:00/HH:30, per source)", tooltip="Source (family_orderflow.md Candidate 2 / Zarattini et al. SSRN working paper) evaluates breakouts only at fixed half-hour decision checkpoints (HH:00 and HH:30 in the session timezone). When true, long/short signals can only fire on a confirmed bar whose close lands on one of those checkpoints. When false, signals evaluate continuously on every confirmed bar close — an explicitly unvalidated variant with no source backing.", group=groupSetup)
+
+// Display inputs
+showBands = input.bool(true, "Show noise bands", group=groupDisplay)
+showVwap = input.bool(true, "Show session VWAP", group=groupDisplay)
+
+// Session resolution
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+inWarmup = not na(time(timeframe.period, warmupWindow, tzStr))
+isNewDay = timeframe.change("D")
+sessionStart = inSession and not inSession[1]
+
+// Persistent state
+var array<float> moveHistory = array.new<float>(0)
+var float sessionOpenToday = na
+var float lastSessionClose = na
+var bool tradedLongToday = false
+var bool tradedShortToday = false
+var string lastDir = "long"
+var float lastEntry = na
+var float lastStop = na
+var float lastTp1 = na
+var float lastTp2 = na
+var label sigLabel = na
+var bool sessionEndedToday = false
+var float sumPV = na
+var float sumVol = na
+
+// Session VWAP — anchored to session start (not the exchange daily
+// boundary) and accumulated only over in-session bars, so pre/post-session
+// bars on a chart that includes them cannot skew the session VWAP (finding:
+// ta.vwap(..., isNewDay, ...) reset on the exchange day boundary and kept
+// accumulating on every bar regardless of session membership). Manual
+// running sum because ta.vwap has no "skip this bar" input.
+if sessionStart
+    sumPV := 0.0
+    sumVol := 0.0
+if inSession
+    sumPV := nz(sumPV) + hlc3 * volume
+    sumVol := nz(sumVol) + volume
+vwapVal = sumVol > 0 ? sumPV / sumVol : na
+
+// Roll the prior completed session's realized move into history, then reset
+// today's trackers. Runs once per new day, using only already-completed data
+// (no lookahead: sessionOpenToday/lastSessionClose from the day that just ended).
+if isNewDay
+    if not na(sessionOpenToday) and not na(lastSessionClose) and sessionOpenToday > 0
+        dayMove = math.abs(lastSessionClose / sessionOpenToday - 1)
+        array.push(moveHistory, dayMove)
+        if array.size(moveHistory) > lookbackDays
+            array.shift(moveHistory)
+    sessionOpenToday := na
+    lastSessionClose := na
+    tradedLongToday := false
+    tradedShortToday := false
+    sessionEndedToday := false
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := na
+
+// Track today's session open and running last close (only while in session).
+if inSession
+    if na(sessionOpenToday)
+        sessionOpenToday := open
+    lastSessionClose := close
+
+// Clamp: minWarmupDays cannot exceed lookbackDays, because moveHistory is
+// itself capped at lookbackDays entries (array.shift above). Without this
+// clamp, minWarmupDays > lookbackDays makes hasHistory permanently false
+// and the setup silently never signals — see README.
+effectiveWarmupDays = math.min(minWarmupDays, lookbackDays)
+hasHistory = array.size(moveHistory) >= effectiveWarmupDays
+avgAbsMove = hasHistory ? array.avg(moveHistory) : na
+// hasBoundaryData intentionally does NOT require inSession: sessionOpenToday
+// and avgAbsMove both persist after the session closes (they are only reset
+// on the next isNewDay), so the boundary/label state must stay valid through
+// the session-close bar too. If this were gated on inSession, the label would
+// freeze on its last pre-close state and never redraw to "expired".
+hasBoundaryData = not na(sessionOpenToday) and sessionOpenToday > 0 and not na(avgAbsMove)
+upperBoundary = hasBoundaryData ? sessionOpenToday * (1 + noiseMult * avgAbsMove) : na
+lowerBoundary = hasBoundaryData ? sessionOpenToday * (1 - noiseMult * avgAbsMove) : na
+bandWidth = hasBoundaryData ? upperBoundary - sessionOpenToday : na
+
+// Breakout detection — confirmed-bar close crossing the boundary. No
+// request.security, no lookahead. Unlike the DT ORB v1 reference (which does
+// not gate on barstate.isconfirmed), this setup requires the confirmed close
+// explicitly: barstate.isconfirmed is true for all historical bars and only
+// on the final realtime update of the live bar, which prevents a signal from
+// firing and then disappearing again as the still-forming bar's price moves
+// back inside the band (Codex design-review recommendation).
+// Checkpoint detection: the confirmed bar's close time, in the session
+// timezone, must land exactly on a half-hour boundary (minute 0 or 30).
+// This holds for 1m and 5m charts whose bars are aligned to the session
+// open on standard round-number boundaries (e.g. a 5m bar spanning
+// 09:25:00-09:30:00 closes at 09:30:00 exactly). It is NOT verified for
+// charts with non-standard bar alignment or timeframes that do not evenly
+// divide 30 minutes (e.g. some custom/renko-style feeds) — checkpointOnly
+// should be disabled for those, since minute(time_close, tzStr) % 30 == 0
+// may never be true or may fire at the wrong bar.
+isCheckpointBar = minute(time_close, tzStr) % 30 == 0
+// Checkpoint-mode condition: the source evaluates "is price beyond the
+// boundary?" AT each half-hour checkpoint, not "did price cross the
+// boundary ON this exact bar?" ta.crossover/crossunder only fire on the
+// bar the cross happens, so with checkpointOnly=true a break that occurred
+// between checkpoints (and simply remained outside the band) was never
+// traded — deviation from source, fixed here. checkpointOnly=true uses a
+// level test (close beyond boundary) sampled only on checkpoint bars;
+// checkpointOnly=false keeps the crossover semantics as the explicitly
+// unvalidated continuous-evaluation variant (no source backing).
+longCondition = checkpointOnly ? (isCheckpointBar and close > upperBoundary) : ta.crossover(close, upperBoundary)
+shortCondition = checkpointOnly ? (isCheckpointBar and close < lowerBoundary) : ta.crossunder(close, lowerBoundary)
+canEnter = inSession and not inWarmup and hasBoundaryData and barstate.isconfirmed
+longSignal = canEnter and not tradedLongToday and longCondition
+shortSignal = canEnter and not tradedShortToday and shortCondition
+
+// Trailing exit level — source rule is "exit when price crosses back
+// through max(upper_boundary, VWAP)" for longs / "min(lower_boundary,
+// VWAP)" for shorts (family_orderflow.md Candidate 2), not a bare VWAP
+// cross. upperBoundary/lowerBoundary are constant for the session once
+// hasBoundaryData is true, so this combines the static band level with the
+// live VWAP every bar.
+longExitLevel = hasBoundaryData ? math.max(upperBoundary, vwapVal) : vwapVal
+shortExitLevel = hasBoundaryData ? math.min(lowerBoundary, vwapVal) : vwapVal
+
+if longSignal
+    tradedLongToday := true
+    lastDir := "long"
+    lastEntry := close
+    lastStop := longExitLevel
+    lastTp1 := close + bandWidth * tp1Mult
+    lastTp2 := close + bandWidth * tp2Mult
+
+if shortSignal
+    tradedShortToday := true
+    lastDir := "short"
+    lastEntry := close
+    lastStop := shortExitLevel
+    lastTp1 := close - bandWidth * tp1Mult
+    lastTp2 := close - bandWidth * tp2Mult
+
+// Trail the stop to max(upperBoundary, VWAP) / min(lowerBoundary, VWAP)
+// every bar after entry, matching the source's "exit when price crosses
+// back through max/min(boundary, VWAP)" rule. Ratcheted (Codex
+// design-review recommendation): the stop only ever tightens toward price,
+// so a "trailing" stop cannot loosen if the band-combined level itself
+// drifts back against the position intrabar. If the entry-bar level is
+// already on the wrong side of entry, the stop is immediately marketable
+// and the position exits on the next tick — this is a real, documented
+// possible outcome of the source rule, not a bug.
+tradedToday = tradedLongToday or tradedShortToday
+if tradedToday and not na(vwapVal)
+    lastStop := lastDir == "long" ? math.max(nz(lastStop, longExitLevel), longExitLevel) : math.min(nz(lastStop, shortExitLevel), shortExitLevel)
+
+// Label state and candidate projection while forming.
+// sessionEndedToday is a persistent flag (reset only on isNewDay above),
+// not a one-bar pulse: `inSession[1] and not inSession` is only true on
+// the single bar of the RTH->outside transition, so a plain pulse-based
+// sessionEnded would flip an untriggered label back from "expired" to
+// "forming" on the very next out-of-session bar (sessionEnded false again).
+// Latching it into a var makes "expired" sticky for the rest of the day.
+if inSession[1] and not inSession
+    sessionEndedToday := true
+orMid = hasBoundaryData ? sessionOpenToday : na
+candidateDir = hasBoundaryData and close < orMid ? "short" : "long"
+candidateEntry = hasBoundaryData ? (candidateDir == "long" ? upperBoundary : lowerBoundary) : na
+candidateStop = candidateDir == "long" ? longExitLevel : shortExitLevel
+candidateTp1 = hasBoundaryData ? (candidateDir == "long" ? candidateEntry + bandWidth * tp1Mult : candidateEntry - bandWidth * tp1Mult) : na
+candidateTp2 = hasBoundaryData ? (candidateDir == "long" ? candidateEntry + bandWidth * tp2Mult : candidateEntry - bandWidth * tp2Mult) : na
+
+sigState = tradedToday ? "triggered" : (sessionEndedToday ? "expired" : "forming")
+labelDir = tradedToday ? lastDir : candidateDir
+labelEntry = tradedToday ? lastEntry : candidateEntry
+labelStop = tradedToday ? lastStop : candidateStop
+labelTp1 = tradedToday ? lastTp1 : candidateTp1
+labelTp2 = tradedToday ? lastTp2 : candidateTp2
+
+f_sigText(_dir, _state, _entry, _sl, _tp1, _tp2) =>
+    "DT|noise_break|" + _dir + "|" + _state + "|entry=" + str.tostring(_entry, format.mintick) + "|sl=" + str.tostring(_sl, format.mintick) + "|tp1=" + str.tostring(_tp1, format.mintick) + "|tp2=" + str.tostring(_tp2, format.mintick)
+
+showLabel = hasBoundaryData and not na(labelEntry) and not na(labelStop) and not na(labelTp1) and not na(labelTp2)
+labelColor = sigState == "triggered" ? color.new(color.green, 0) : sigState == "expired" ? color.new(color.gray, 0) : color.new(color.orange, 0)
+labelStyle = labelDir == "long" ? label.style_label_up : label.style_label_down
+
+if showLabel
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, labelEntry, f_sigText(labelDir, sigState, labelEntry, labelStop, labelTp1, labelTp2), style=labelStyle, color=labelColor, textcolor=color.white)
+
+// Visual history and levels
+upperPlot = plot(showBands and hasBoundaryData ? upperBoundary : na, "Upper band", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+lowerPlot = plot(showBands and hasBoundaryData ? lowerBoundary : na, "Lower band", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+fill(upperPlot, lowerPlot, color=color.new(color.yellow, 92), title="Noise area")
+plot(showVwap and inSession ? vwapVal : na, "Session VWAP", color=color.new(color.blue, 0), linewidth=1)
+plotshape(longSignal, title="Noise Break Long", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), text="NB L", size=size.tiny)
+plotshape(shortSignal, title="Noise Break Short", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="NB S", size=size.tiny)
+
+// Alerts
+alertcondition(longSignal, "DT Noise Break Long", "DT Noise Area Breakout v1 long signal")
+alertcondition(shortSignal, "DT Noise Break Short", "DT Noise Area Breakout v1 short signal")

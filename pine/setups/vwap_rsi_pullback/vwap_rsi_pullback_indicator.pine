@@ -1,0 +1,285 @@
+//@version=6
+indicator("DT VWAP RSI Pullback v1", overlay=true, max_labels_count=50)
+
+// Inputs
+sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group="Session")
+customSession = input.session("0930-1600", "Custom session", group="Session")
+customTimezone = input.string("America/New_York", "Custom timezone", group="Session")
+entryStartOffsetMin = input.int(15, "Entry window start (min after session open)", minval=0, group="Session")
+entryWindowDurationMin = input.int(105, "Entry window duration (min)", minval=1, group="Session")
+flattenBeforeCloseMin = input.int(60, "Flatten offset (min before session close)", minval=0, group="Session")
+rsiLength = input.int(2, "RSI length", minval=1, group="Filters")
+rsiOversold = input.float(25.0, "RSI oversold (long trigger)", minval=1, maxval=49, group="Filters")
+rsiOverbought = input.float(75.0, "RSI overbought (short trigger)", minval=51, maxval=99, group="Filters")
+atrLength = input.int(14, "ATR length", minval=1, group="Filters")
+slAtrMult = input.float(1.5, "SL distance beyond VWAP (ATR mult)", minval=0.1, step=0.1, group="Filters")
+tp1MaxAtrMult = input.float(2.0, "TP1 fallback / max-distance (ATR mult)", minval=0.1, step=0.1, group="Filters")
+
+// Session preset resolution (matches DT ORB v1 convention)
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+
+// Entry/flatten windows are derived from the resolved session's own
+// open/close (sessStr, "HHMM-HHMM") plus the offsets above, instead of the
+// hardcoded 0945/1130/1500 clock times the previous version used — those
+// were tuned for the NY/RTH open (0930) and silently meant something
+// different (or fell outside the session entirely) once sessionPreset was
+// switched to Tokyo/London/Custom. If the derived windows do not fit inside
+// the session (entry starting before session open, flatten starting before
+// entry-window end, flatten window ending after session close, etc.),
+// configValid is false: inEntryWindow/inFlattenWindow are permanently false,
+// so no trend/arm/signal state ever advances and a single warning label is
+// shown instead (see README "Session-derived windows").
+sessOpenHour = int(str.tonumber(str.substring(sessStr, 0, 2)))
+sessOpenMinute = int(str.tonumber(str.substring(sessStr, 2, 4)))
+sessCloseHour = int(str.tonumber(str.substring(sessStr, 5, 7)))
+sessCloseMinute = int(str.tonumber(str.substring(sessStr, 7, 9)))
+sessOpenMin = sessOpenHour * 60 + sessOpenMinute
+sessCloseMin = sessCloseHour * 60 + sessCloseMinute
+entryStartMin = sessOpenMin + entryStartOffsetMin
+entryEndMin = entryStartMin + entryWindowDurationMin
+flattenStartMin = sessCloseMin - flattenBeforeCloseMin
+flattenEndMin = sessCloseMin
+
+configValid = sessCloseMin > sessOpenMin and entryStartMin >= sessOpenMin and entryEndMin > entryStartMin and
+     entryEndMin <= sessCloseMin and flattenStartMin >= entryEndMin and flattenStartMin < flattenEndMin and
+     flattenEndMin <= sessCloseMin
+
+openMinOfDay = hour(time, tzStr) * 60 + minute(time, tzStr)
+closeMinOfDay = hour(time_close, tzStr) * 60 + minute(time_close, tzStr)
+
+inEntryWindow = configValid and openMinOfDay >= entryStartMin and openMinOfDay < entryEndMin
+// Flatten is keyed on the bar's CLOSE time (not open): a 5m bar spanning
+// 14:55-15:00 has its close land exactly on the 15:00 flatten target and
+// triggers the flatten then, instead of waiting for the 15:00-15:05 bar
+// (whose OPEN is 15:00) to close at 15:05.
+inFlattenWindow = configValid and closeMinOfDay >= flattenStartMin and closeMinOfDay < flattenEndMin
+isNewDay = timeframe.change("D")
+sessionStart = isNewDay or (inSession and not inSession[1])
+
+// Session VWAP (manual accumulation, reset at session start; ta.vwap's built-in
+// anchor does not track an arbitrary preset session window, so this is computed
+// explicitly to stay correct across Tokyo/London/NY/RTH/Custom presets)
+var float vwapSum = na
+var float volSum = na
+if sessionStart
+    vwapSum := 0.0
+    volSum := 0.0
+if inSession
+    vwapSum := nz(vwapSum) + hlc3 * volume
+    volSum := nz(volSum) + volume
+sessionVwap = volSum > 0 ? vwapSum / volSum : na
+
+// Prior-day high/low (non-repainting: [1] offset + lookahead_on, matches PINE_CONVENTIONS.md)
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1], lookahead=barmerge.lookahead_on)
+
+atrValue = ta.atr(atrLength)
+rsiValue = ta.rsi(close, rsiLength)
+
+// Day state
+var int upCount = 0
+var int downCount = 0
+var string trendDir = na
+var bool armed = false
+var string armedDir = na
+var int armedTouchBar = na
+var bool longTradedToday = false
+var bool shortTradedToday = false
+var bool expiredToday = false
+var float activeEntry = na
+var float activeStop = na
+var float activeTp1 = na
+var float activeTp2 = na
+var string activeDir = na
+var label sigLabel = na
+var label warnLabel = na
+
+// Fail closed: if the derived entry/flatten windows do not fit inside the
+// resolved session, show one managed warning label (created once, never
+// re-created per bar) instead of the DT signal label, and never advance any
+// signal state (inEntryWindow/inFlattenWindow are already permanently false
+// via configValid above).
+if not configValid and na(warnLabel) and barstate.isconfirmed
+    warnLabel := label.new(bar_index, high, "DT vwap_rsi_pullback: entry/flatten window does not fit inside session - no signals", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
+
+if isNewDay
+    upCount := 0
+    downCount := 0
+    trendDir := na
+    armed := false
+    armedDir := na
+    armedTouchBar := na
+    longTradedToday := false
+    shortTradedToday := false
+    expiredToday := false
+    activeEntry := na
+    activeStop := na
+    activeTp1 := na
+    activeTp2 := na
+    activeDir := na
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := na
+
+// Trend qualification: 3 consecutive closes on one side of session VWAP,
+// counted only from bars inside the entry window (matches the source study's
+// "after 09:45 ET" definition). Gated on barstate.isconfirmed so an intrabar
+// tick cannot increment/reset the count or latch trendDir before the bar is
+// final (matches pine/setups/torb/torb_indicator.pine's confirmed-bar rule).
+if barstate.isconfirmed
+    if inEntryWindow and not na(sessionVwap)
+        if close > sessionVwap
+            upCount := upCount + 1
+            downCount := 0
+        else if close < sessionVwap
+            downCount := downCount + 1
+            upCount := 0
+        else
+            upCount := 0
+            downCount := 0
+    else
+        upCount := 0
+        downCount := 0
+
+    if upCount >= 3
+        trendDir := "long"
+    if downCount >= 3
+        trendDir := "short"
+
+hasTrend = not na(trendDir)
+
+// Touch + RSI trigger: arm on a bar whose range crosses session VWAP while
+// RSI(2) is extreme in the trend direction. Confirmation is required on the
+// very next bar (bar_index == armedTouchBar + 1) closing back on the trend
+// side of VWAP, avoiding same-bar / intrabar repainting.
+touchesVwap = not na(sessionVwap) and low <= sessionVwap and high >= sessionVwap
+touchLong = inEntryWindow and hasTrend and trendDir == "long" and not longTradedToday and touchesVwap and rsiValue < rsiOversold
+touchShort = inEntryWindow and hasTrend and trendDir == "short" and not shortTradedToday and touchesVwap and rsiValue > rsiOverbought
+
+// Gated on barstate.isconfirmed so arming cannot latch onto a still-forming
+// bar's intrabar low/high touch or RSI value.
+if barstate.isconfirmed and inEntryWindow and not armed
+    if touchLong
+        armed := true
+        armedDir := "long"
+        armedTouchBar := bar_index
+    else if touchShort
+        armed := true
+        armedDir := "short"
+        armedTouchBar := bar_index
+
+longSignal = false
+shortSignal = false
+
+// Gated on barstate.isconfirmed so the confirmation close (and the resulting
+// longSignal/shortSignal alert) cannot fire on an intrabar tick before the
+// confirmation bar itself is final.
+if barstate.isconfirmed and armed and not na(armedTouchBar) and bar_index == armedTouchBar + 1
+    confirmLong = armedDir == "long" and inEntryWindow and not na(sessionVwap) and close > sessionVwap and not longTradedToday
+    confirmShort = armedDir == "short" and inEntryWindow and not na(sessionVwap) and close < sessionVwap and not shortTradedToday
+    if confirmLong
+        entryPx = close
+        slDist = slAtrMult * atrValue
+        maxDist = tp1MaxAtrMult * atrValue
+        sl = sessionVwap - slDist
+        tp1 = (not na(pdh) and pdh > entryPx and (pdh - entryPx) < maxDist) ? pdh : entryPx + maxDist
+        tp2 = entryPx + 2.0 * (tp1 - entryPx)
+        activeEntry := entryPx
+        activeStop := sl
+        activeTp1 := tp1
+        activeTp2 := tp2
+        activeDir := "long"
+        longTradedToday := true
+        longSignal := true
+    else if confirmShort
+        entryPx = close
+        slDist = slAtrMult * atrValue
+        maxDist = tp1MaxAtrMult * atrValue
+        sl = sessionVwap + slDist
+        tp1 = (not na(pdl) and pdl < entryPx and (entryPx - pdl) < maxDist) ? pdl : entryPx - maxDist
+        tp2 = entryPx - 2.0 * (entryPx - tp1)
+        activeEntry := entryPx
+        activeStop := sl
+        activeTp1 := tp1
+        activeTp2 := tp2
+        activeDir := "short"
+        shortTradedToday := true
+        shortSignal := true
+    armed := false
+    armedDir := na
+    armedTouchBar := na
+
+// Entry window close: expire any qualified-but-untriggered candidate and
+// freeze its projected values so the label stops drifting afterward.
+tradedAny = longTradedToday or shortTradedToday
+candidateDir = hasTrend ? trendDir : na
+candidateEntry = na(candidateDir) or na(sessionVwap) ? na : sessionVwap
+float candidateSl = na
+float candidateTp1 = na
+float candidateTp2 = na
+if not na(candidateEntry) and not na(atrValue)
+    maxDistC = tp1MaxAtrMult * atrValue
+    slDistC = slAtrMult * atrValue
+    if candidateDir == "long"
+        candidateSl := candidateEntry - slDistC
+        candidateTp1 := (not na(pdh) and pdh > candidateEntry and (pdh - candidateEntry) < maxDistC) ? pdh : candidateEntry + maxDistC
+        candidateTp2 := candidateEntry + 2.0 * (candidateTp1 - candidateEntry)
+    else if candidateDir == "short"
+        candidateSl := candidateEntry + slDistC
+        candidateTp1 := (not na(pdl) and pdl < candidateEntry and (candidateEntry - pdl) < maxDistC) ? pdl : candidateEntry - maxDistC
+        candidateTp2 := candidateEntry - 2.0 * (candidateEntry - candidateTp1)
+
+if inEntryWindow[1] and not inEntryWindow and hasTrend and not tradedAny
+    expiredToday := true
+    activeEntry := candidateEntry
+    activeStop := candidateSl
+    activeTp1 := candidateTp1
+    activeTp2 := candidateTp2
+    activeDir := candidateDir
+
+// Label state and text
+sigState = tradedAny ? "triggered" : expiredToday ? "expired" : "forming"
+labelDir = tradedAny or expiredToday ? activeDir : candidateDir
+labelEntry = tradedAny or expiredToday ? activeEntry : candidateEntry
+labelStop = tradedAny or expiredToday ? activeStop : candidateSl
+labelTp1 = tradedAny or expiredToday ? activeTp1 : candidateTp1
+labelTp2 = tradedAny or expiredToday ? activeTp2 : candidateTp2
+
+f_sigText(_dir, _state, _entry, _sl, _tp1, _tp2) =>
+    "DT|vwap_rsi_pullback|" + _dir + "|" + _state + "|entry=" + str.tostring(_entry, format.mintick) + "|sl=" + str.tostring(_sl, format.mintick) + "|tp1=" + str.tostring(_tp1, format.mintick) + "|tp2=" + str.tostring(_tp2, format.mintick)
+
+showLabel = inSession and hasTrend and not na(labelDir) and not na(labelEntry) and not na(labelStop) and not na(labelTp1) and not na(labelTp2)
+labelColor = sigState == "triggered" ? color.new(color.green, 0) : sigState == "expired" ? color.new(color.gray, 0) : color.new(color.orange, 0)
+labelStyle = labelDir == "long" ? label.style_label_up : label.style_label_down
+
+if showLabel
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, labelEntry, f_sigText(labelDir, sigState, labelEntry, labelStop, labelTp1, labelTp2), style=labelStyle, color=labelColor, textcolor=color.white)
+
+// Flatten marker (informational only; indicator does not hold positions)
+flattenNow = inFlattenWindow and not inFlattenWindow[1]
+
+// Visual history and levels
+plot(inSession ? sessionVwap : na, "Session VWAP", color=color.new(color.blue, 0), linewidth=2)
+plotshape(longSignal, title="VWAP RSI Long", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), text="VRP L", size=size.tiny)
+plotshape(shortSignal, title="VWAP RSI Short", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="VRP S", size=size.tiny)
+plotshape(flattenNow, title="Flatten", style=shape.xcross, location=location.abovebar, color=color.new(color.gray, 0), text="FLAT", size=size.tiny)
+
+// Alerts
+alertcondition(longSignal, "DT VWAP RSI Pullback Long", "DT VWAP RSI Pullback v1 long signal")
+alertcondition(shortSignal, "DT VWAP RSI Pullback Short", "DT VWAP RSI Pullback v1 short signal")

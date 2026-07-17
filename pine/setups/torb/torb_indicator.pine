@@ -1,0 +1,231 @@
+//@version=6
+indicator("DT TORB v1", overlay=true, max_labels_count=50)
+
+// Inputs
+string groupSession = "Session"
+sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+orWindow = input.session("0930-0931", "OR window (probe time)", group=groupSession)
+string groupFilters = "Filters"
+maxOrWidthAtr = input.float(2.5, "Max OR width (ATR mult)", minval=0.1, step=0.1, group=groupFilters)
+signalValidityBars = input.int(24, "Signal validity (bars)", minval=1, group=groupFilters)
+
+// Session preset resolution
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+inOrWindow = not na(time(timeframe.period, orWindow, tzStr))
+// Daily state reset. timeframe.change("D") flips at the exchange's calendar
+// day boundary, not at the configured session's own start/end. This is
+// correct for same-day sessions (Tokyo/London/NY/RTH and any Custom session
+// that starts and ends within one calendar day), but it does NOT correctly
+// reset state for an overnight Custom session (e.g. one that starts before
+// midnight and ends after it) — the reset would fire mid-session instead of
+// at the session boundary. This is an accepted limitation shared by every
+// setup in this library (see pine/PINE_CONVENTIONS.md), not something fixed
+// locally here; overnight Custom sessions are out of scope until the
+// library-wide convention changes. See README.md "Known limitations".
+isNewDay = timeframe.change("D")
+
+atrValue = ta.atr(14)
+
+// OR-window / chart-timeframe mismatch detector (see README.md "5-minute or
+// slower charts do not reproduce a 1-minute OR"). Only meaningful when the
+// configured OR window is exactly 1 minute long, since that is the specific
+// case that silently degrades on any chart timeframe coarser than 1 minute.
+f_sessionMinutes(_s) =>
+    parts = str.split(_s, "-")
+    startRaw = array.size(parts) > 0 ? array.get(parts, 0) : ""
+    endRaw = array.size(parts) > 1 ? array.get(parts, 1) : ""
+    startParts = str.split(startRaw, ":")
+    endParts = str.split(endRaw, ":")
+    startClean = array.size(startParts) > 0 ? array.get(startParts, 0) : startRaw
+    endClean = array.size(endParts) > 0 ? array.get(endParts, 0) : endRaw
+    startMin = str.tonumber(str.substring(startClean, 0, 2)) * 60 + str.tonumber(str.substring(startClean, 2, 4))
+    endMin = str.tonumber(str.substring(endClean, 0, 2)) * 60 + str.tonumber(str.substring(endClean, 2, 4))
+    endMin - startMin
+
+var float orWindowMinutes = f_sessionMinutes(orWindow)
+chartIsOneMinute = timeframe.isminutes and timeframe.multiplier == 1
+orWindowMismatch = orWindowMinutes == 1 and not chartIsOneMinute
+
+// Opening range state
+var float orHigh = na
+var float orLow = na
+var float orWidth = na
+var float orAtrRef = na
+var bool orLocked = false
+var bool orEligible = false
+var int orLockBar = na
+var bool tradedToday = false
+var bool sessionEndedNoTrade = false
+var string lastDir = "long"
+var float lastEntry = na
+var float lastStop = na
+var float lastTp1 = na
+var float lastTp2 = na
+var label sigLabel = na
+
+if isNewDay
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := na
+    orHigh := na
+    orLow := na
+    orWidth := na
+    orAtrRef := na
+    orLocked := false
+    orEligible := false
+    orLockBar := na
+    tradedToday := false
+    sessionEndedNoTrade := false
+    lastDir := "long"
+    lastEntry := na
+    lastStop := na
+    lastTp1 := na
+    lastTp2 := na
+
+// Build the opening range during the probe window only
+if inOrWindow
+    orHigh := na(orHigh) ? high : math.max(orHigh, high)
+    orLow := na(orLow) ? low : math.min(orLow, low)
+    orLocked := false
+    orEligible := false
+    orLockBar := na
+    orWidth := na
+    orAtrRef := na
+
+// Lock the range on the first bar after the probe window closes.
+// ATR eligibility is frozen at lock time so it cannot flip mid-session.
+if inOrWindow[1] and not inOrWindow and not na(orHigh) and not na(orLow)
+    orLocked := true
+    orLockBar := bar_index
+    orWidth := orHigh - orLow
+    orAtrRef := atrValue
+    orEligible := orWidth > 0 and not na(orAtrRef) and orWidth <= orAtrRef * maxOrWidthAtr
+
+// Signal validity window = first N confirmed bars after lock (bar 0 = the
+// lock bar itself, i.e. the first bar outside the OR window). This is a
+// strict "< N" bound: barsSinceLock in [0, N-1] are the N eligible bars.
+barsSinceLock = orLocked and not na(orLockBar) ? bar_index - orLockBar : na
+validityOk = orLocked and orEligible and not na(barsSinceLock) and barsSinceLock < signalValidityBars
+validityExpired = orLocked and orEligible and not tradedToday and not na(barsSinceLock) and barsSinceLock >= signalValidityBars
+
+// Entry trigger: first confirmed bar CLOSING outside the locked OR range
+// (not a crossover — a same-bar gap-and-close-outside also qualifies).
+// Confirmed-bar gating avoids repainting the signal on an intrabar tick.
+longSignal = barstate.isconfirmed and inSession and validityOk and not tradedToday and close > orHigh
+shortSignal = barstate.isconfirmed and inSession and validityOk and not tradedToday and close < orLow
+
+if longSignal
+    lastDir := "long"
+    lastEntry := close
+    lastStop := orLow
+    lastTp1 := close + orWidth
+    lastTp2 := close + orWidth * 2.0
+    tradedToday := true
+
+if shortSignal
+    lastDir := "short"
+    lastEntry := close
+    lastStop := orHigh
+    lastTp1 := close - orWidth
+    lastTp2 := close - orWidth * 2.0
+    tradedToday := true
+
+// Session ends with an eligible-but-unfired range -> expired.
+// Detected via the final-session-bar idiom (same as torb_strategy.pine's EOD
+// close), NOT the library-wide `inSession[1] and not inSession` convention:
+// that convention only fires on the first bar *outside* the session, which
+// never exists on an RTH-only chart with no after-hours data — the unfired
+// range would stay labeled "forming" forever instead of turning "expired".
+// `sessionEndBar` flags the last bar *inside* the session: its open still
+// qualifies for `inSession` but its close reaches or passes the session end
+// boundary, so `time_close()` no longer qualifies. `sessionEndedNoTrade` is
+// a persistent flag reset on the new-day block above.
+sessionEndBar = inSession and na(time_close(timeframe.period, sessStr, tzStr))
+if barstate.isconfirmed and sessionEndBar and orLocked and orEligible and not tradedToday
+    sessionEndedNoTrade := true
+
+// Label state and risk projection
+hasBuildingRange = not na(orHigh) and not na(orLow) and orHigh > orLow
+orMid = hasBuildingRange ? (orHigh + orLow) / 2.0 : na
+candidateDir = hasBuildingRange and close < orMid ? "short" : "long"
+candidateEntry = candidateDir == "long" ? orHigh : orLow
+candidateStop = candidateDir == "long" ? orLow : orHigh
+candidateWidth = hasBuildingRange ? orHigh - orLow : na
+candidateTp1 = na(candidateWidth) ? na : candidateDir == "long" ? candidateEntry + candidateWidth : candidateEntry - candidateWidth
+// tp2 is a display-only 2x-range reference, not an executable order price:
+// TORB's real TP2 is "hold to session close" (unknown price ahead of time).
+candidateTp2 = na(candidateWidth) ? na : candidateDir == "long" ? candidateEntry + candidateWidth * 2.0 : candidateEntry - candidateWidth * 2.0
+
+// sigState: "" means "no label to show" (range not yet valid, or locked but
+// rejected by the width/ATR filter — a rejected day is never mislabeled as
+// forming/triggered/expired).
+sigState = tradedToday ? "triggered" : (validityExpired or sessionEndedNoTrade) ? "expired" : (orLocked and orEligible) ? "forming" : (not orLocked and hasBuildingRange) ? "forming" : ""
+
+labelDir = tradedToday ? lastDir : candidateDir
+labelEntry = tradedToday ? lastEntry : candidateEntry
+labelStop = tradedToday ? lastStop : candidateStop
+labelTp1 = tradedToday ? lastTp1 : candidateTp1
+labelTp2 = tradedToday ? lastTp2 : candidateTp2
+
+f_sigText(_dir, _state, _entry, _sl, _tp1, _tp2) =>
+    "DT|torb|" + _dir + "|" + _state + "|entry=" + str.tostring(_entry, format.mintick) + "|sl=" + str.tostring(_sl, format.mintick) + "|tp1=" + str.tostring(_tp1, format.mintick) + "|tp2=" + str.tostring(_tp2, format.mintick)
+
+showLabel = sigState != "" and not na(labelEntry) and not na(labelStop) and not na(labelTp1) and not na(labelTp2)
+labelColor = sigState == "triggered" ? color.new(color.green, 0) : sigState == "expired" ? color.new(color.gray, 0) : color.new(color.orange, 0)
+labelStyle = labelDir == "long" ? label.style_label_up : label.style_label_down
+
+if showLabel
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, labelEntry, f_sigText(labelDir, sigState, labelEntry, labelStop, labelTp1, labelTp2), style=labelStyle, color=labelColor, textcolor=color.white)
+else
+    // Explicitly clear a stale label when the state stops being displayable
+    // (e.g. a locked-but-ATR-rejected day) — do not leave a frozen label.
+    if not na(sigLabel)
+        label.delete(sigLabel)
+        sigLabel := na
+
+// Visual history and levels
+orHighPlot = plot(inOrWindow or orLocked ? orHigh : na, "OR High", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+orLowPlot = plot(inOrWindow or orLocked ? orLow : na, "OR Low", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+fill(orHighPlot, orLowPlot, color=color.new(color.yellow, 90), title="OR Range")
+plotshape(longSignal, title="TORB Long", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), text="TORB L", size=size.tiny)
+plotshape(shortSignal, title="TORB Short", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="TORB S", size=size.tiny)
+
+// Alerts
+alertcondition(longSignal, "DT TORB Long", "DT TORB v1 long signal")
+alertcondition(shortSignal, "DT TORB Short", "DT TORB v1 short signal")
+
+// Single managed warning label: OR window is configured as a true 1-minute
+// probe but the chart is not a 1-minute chart, so the OR silently degrades
+// to the current chart bar's full range (see README.md). One label instance
+// is created once and then re-anchored to the latest bar every bar via
+// label.set_x/label.set_y, rather than a new label per bar. This is a
+// separate, independently managed label from `sigLabel` above (a distinct
+// concern: chart/config mismatch vs. the DT signal contract).
+var label orWarnLabel = na
+if orWindowMismatch
+    if na(orWarnLabel)
+        orWarnLabel := label.new(bar_index, high, "TORB: OR window=1m but chart TF=" + timeframe.period + " — OR degrades to chart-bar range (unvalidated variant)", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+    else
+        label.set_x(orWarnLabel, bar_index)
+        label.set_y(orWarnLabel, high)
+else if not na(orWarnLabel)
+    label.delete(orWarnLabel)
+    orWarnLabel := na

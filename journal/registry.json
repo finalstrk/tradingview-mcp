@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-07-05",
+  "updated": "2026-07-17",
   "setups": [
     {
       "id": "orb",
@@ -354,6 +354,254 @@
         "sl": "mother_opposite",
         "tp1": "1.5R",
         "tp2": "2.5R"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    },
+    {
+      "id": "torb",
+      "name": "Time-based Opening Range Breakout",
+      "pine_indicator": "pine/setups/torb/torb_indicator.pine",
+      "pine_strategy": "pine/setups/torb/torb_strategy.pine",
+      "tv_script_name": "DT TORB v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "candidate",
+          "timeframes": [
+            "1"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Research evidence is index futures only; fx is an untested extrapolation. See docs/research/scalping-20260717/family_orb.md. Validated variant is the 1-minute OR window; on >1m charts the OR degrades to the chart-bar range (unvalidated)."
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "1"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Primary research target (IEEE Access TORB, Grade A source / B in practice). DT TP1/SL overlay is untested vs the EOD-only source exit. Validated variant is the 1-minute OR window; on >1m charts the OR degrades to the chart-bar range (unvalidated)."
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "1"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Validated variant is the 1-minute OR window; on >1m charts the OR degrades to the chart-bar range (unvalidated)."
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "1"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Validated variant is the 1-minute OR window; on >1m charts the OR degrades to the chart-bar range (unvalidated)."
+        }
+      },
+      "risk_model": {
+        "sl": "or_opposite",
+        "tp1": "1x_or_width",
+        "tp2": "display_only_eod"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    },
+    {
+      "id": "intraday_momo",
+      "name": "Session Momentum to Close",
+      "pine_indicator": "pine/setups/intraday_momo/intraday_momo_indicator.pine",
+      "pine_strategy": "pine/setups/intraday_momo/intraday_momo_strategy.pine",
+      "tv_script_name": "DT Intraday Momentum v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Currency futures showed the weakest effect (Sharpe 0.87) in the 1974-2020 extension; low priority."
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Preferred variant per docs/research/scalping-20260717/family_meta.md: index futures 1974-2020 Sharpe 1.73; SPY-specific 2010-2018 replication was NEGATIVE (Sharpe -2.70)."
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "SPY variant has a documented negative independent replication; treat as decayed until local backtest proves otherwise."
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        }
+      },
+      "risk_model": {
+        "sl": "atr_disaster_stop",
+        "tp1": "optional_1atr",
+        "tp2": "session_close"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    },
+    {
+      "id": "noise_break",
+      "name": "Noise Area Breakout",
+      "pine_indicator": "pine/setups/noise_break/noise_break_indicator.pine",
+      "pine_strategy": "pine/setups/noise_break/noise_break_strategy.pine",
+      "tv_script_name": "DT Noise Area Breakout v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "candidate",
+          "timeframes": [
+            "1",
+            "5"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Source evidence is SPY/ES/NQ; fx untested."
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "1",
+            "5"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Grade B (SSRN + 3 independent write-ups, no independent OOS). Entries gated to HH:00/HH:30 checkpoints per source; see docs/research/scalping-20260717/family_orderflow.md."
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "1",
+            "5"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "1",
+            "5"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        }
+      },
+      "risk_model": {
+        "sl": "max_boundary_vwap_trail",
+        "tp1": "1x_boundary_distance",
+        "tp2": "fixed_limit_or_eod"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    },
+    {
+      "id": "vwap_rsi_pullback",
+      "name": "Morning VWAP RSI Pullback",
+      "pine_indicator": "pine/setups/vwap_rsi_pullback/vwap_rsi_pullback_indicator.pine",
+      "pine_strategy": "pine/setups/vwap_rsi_pullback/vwap_rsi_pullback_strategy.pine",
+      "tv_script_name": "DT VWAP RSI Pullback v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "candidate",
+          "timeframes": [
+            "5"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Untested extrapolation; source is QQQ only."
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "5"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Untested extrapolation from QQQ evidence."
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "5"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Grade B: single 2024-2025 QQQ study recurring across 5 research passes. Morning window (0945-1130) strongest. See docs/research/scalping-20260717/family_vwap.md."
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "5"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        }
+      },
+      "risk_model": {
+        "sl": "1.5atr_beyond_vwap",
+        "tp1": "prior_day_hl_or_2atr",
+        "tp2": "2x_tp1_or_1500_flat"
       },
       "session_presets": {
         "fx": "London/NY",

@@ -1,0 +1,76 @@
+{
+  "id": "intraday_momo",
+  "market": "futures_index (ES-class) / SPY-class liquid ETF",
+  "timeframe": "5m/15m intraday bars, one decision per RTH session",
+  "data_source": "TradingView OHLCV via the DT Intraday Momentum v1 Pine indicator/strategy pair, cross-checked against the source academic papers (Gao-Han-Li-Zhou JFE 1993-2013; Baltussen et al. 1974-2020 global futures extension) for the unadapted logic; no external verification feed for the DT SL/TP1 overlay, which is untested by any source",
+  "entry": [
+    "Compute open30Return = close(session_open + 30min) / session_open_price - 1.",
+    "At the decision bar T (default 30 minutes before session close, e.g. 15:30 ET for a 16:00 ET close), compute daySoFarReturn = close(T) / session_open_price - 1.",
+    "If open30Return and daySoFarReturn are both non-zero and share the same sign, enter long when the sign is positive and short when the sign is negative, at the close of the decision bar T.",
+    "No entry if either return is exactly zero or the signs disagree.",
+    "Exactly one entry per session per instrument; no re-entry after the decision bar even if conditions would otherwise qualify."
+  ],
+  "exit_take_profit": [
+    "TP1: close 50% of the position at 1.0x ATR(14) favorable move from entry (DT-contract overlay, not validated by any source study).",
+    "TP2 / remainder: hold the remaining 50% to a hard time exit at session close (matches the source studies' tested 'let it run to close' exit; there is no TP2 limit price)."
+  ],
+  "exit_stop_loss": [
+    "Protective disaster stop at 1.5x ATR(14) beyond entry, applied to the full position at entry and to the TP1 remainder until the EOD time exit (DT-contract overlay, not present in the source studies, which have no native stop-loss)."
+  ],
+  "position_size": "10% of equity per trade (strategy.percent_of_equity, matching the DT ORB v1 reference convention); risk sized off the ATR-based SL distance, not a fixed dollar amount.",
+  "risk": {
+    "max_risk_per_trade": "0.5% equity (position sized so 1.5x ATR(14) stop distance corresponds to at most 0.5% equity risk)",
+    "daily_loss_limit": "1.0% equity; stop taking new signals for the remainder of the day after the daily loss limit is hit (moot in practice since only 1 signal fires per day, but applies across multiple concurrently-run instrument instances)",
+    "max_concurrent_positions": 3,
+    "kill_switch": [
+      "Live/paper P&L diverges materially from the ATR-overlay backtest for 10 consecutive sessions",
+      "TradingView CDP/data feed failure preventing decision-bar detection",
+      "Manual override required before any live-sizing promotion beyond paper trading"
+    ]
+  },
+  "backtest_period": "2020-01-01..2026-06-30",
+  "benchmark": [
+    "Buy-and-hold ES continuous futures (or SPY) over the same dates",
+    "Cash at 0% annual return"
+  ],
+  "validation": {
+    "candidate_count": 1,
+    "negative_result_log": "Preserve the parameters and metrics for each failed, negative, rejected, or underperforming variant tested locally (e.g. alternate ATR multiples for SL/TP1, alternate decision-time offsets, SPY-ETF vs. index-futures instrument choice) in journal/backtests/ per variant/instrument/timeframe run, not only in aggregate.",
+    "diagnostic_test": "Before refining any locally-failing variant, record a counter-thesis for the failure cause (e.g. 'SL/TP1 overlay is cutting the run-to-close tail that produces the edge'), then run one one-variable ablation test (e.g. remove the TP1 partial exit and compare only-EOD-exit performance against the same signal set) and record the observed, actual difference in the outcome metric.",
+    "point_in_time_data": "Single-instrument system: n/a for universe membership. OHLCV bars are available at the decision time T, matching process_orders_on_close=true.",
+    "in_sample_period": "2020-01-01..2022-12-31",
+    "out_of_sample_period": "2023-01-01..2024-12-31",
+    "holdout_period": "2025-01-01..2026-06-30",
+    "parameter_freeze": "Freeze the SL/TP1 ATR multiples, opening-window length, and decision-time offset before opening the 2025-01-01..2026-06-30 holdout window; no holdout-driven retuning of any parameter after the freeze."
+  },
+  "execution": {
+    "primary_fill_model": "Fill at the close of the decision bar T (process_orders_on_close=true, matching the DT ORB v1 reference convention); EOD exit fills at the close of the last in-session bar.",
+    "stress_fill_model": "Conservative one-bar-delayed fill at the following bar open, to approximate slippage beyond the decision-bar close.",
+    "commission": "0.005% per side primary (matching the DT ORB v1 reference strategy header) and 0.02% per side stress.",
+    "spread": "1 tick primary (ES-class index futures) or 1 cent (SPY-class ETF) and 3 ticks / 3 cents adverse stress.",
+    "slippage": "2 ticks primary (matching the strategy header's slippage=2) and 5 ticks adverse stress.",
+    "leverage_funding": "1x gross leverage for the ETF variant; standard index-futures margin (no additional leverage beyond exchange initial margin) for the futures variant. Funding 0 bps for the cash-ETF variant; futures funding is embedded in the roll/basis and is not separately modeled."
+  },
+  "robustness": {
+    "top_trade_removal": "Recompute annualized return and Sharpe after removing the single largest winning trade, and again after removing the top 5% of winning trades, per instrument.",
+    "regime_splits": [
+      "trend/range (ADX-based classification of the RTH session)",
+      "high/low volatility (VIX or realized-vol tercile split)",
+      "COVID-crash subperiod vs. non-crash subperiod (the source paper's OOS retest found the edge concentrated in the COVID period, Sharpe 1.452 vs. -0.628 overall)"
+    ],
+    "long_short_decomposition": "Report long and short trade counts, win rates, and average R separately for both the futures and ETF variants; this setup is not long-only so both sides must be reported.",
+    "concentration_check": "Report the top 1, top 3, and top 5 winning-day PnL contribution as a percentage of total strategy PnL, with a concentration cap of 40% for the top 5 winning days fixed before the holdout period; given the low OOS R² (1.2-2.8%) documented in the source research, high concentration in a small number of days is expected and must be disclosed, not treated as an anomaly."
+  },
+  "paper_trade_period": "2026-07-17..2026-10-17",
+  "review_cadence": "weekly paper review; monthly parameter review",
+  "edge_death_condition": [
+    "PF < 1.0 on the 2025-01-01..2026-06-30 holdout",
+    "Live/paper P&L diverges from the ATR-overlay backtest for 10 consecutive sessions",
+    "Realized OOS Sharpe falls below -1.0 for either the futures or ETF variant, echoing the documented 2010-2018 SPY negative replication (Sharpe -2.70)",
+    "Regime mismatch: edge only present during extreme-volatility periods (e.g. only positive during a COVID-like crash subperiod) rather than persisting across the full holdout"
+  ],
+  "human_confirmation": {
+    "required": true,
+    "live_orders": "manual only; this spec checker never places orders. This setup is a research candidate and must not be marked 'adopted' in journal/registry.json until the holdout period above is completed and independently reviewed."
+  }
+}

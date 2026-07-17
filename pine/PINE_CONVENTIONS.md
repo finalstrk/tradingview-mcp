@@ -10,7 +10,7 @@
 DT|<setup_id>|<dir>|<state>|entry=<price>|sl=<price>|tp1=<price>|tp2=<price>
 ```
 
-- `setup_id`: `orb` / `vwap_reversion` / `pdh_pdl_break` / `ema_pullback` / `nr_squeeze` のいずれか。
+- `setup_id`: `orb` / `vwap_reversion` / `pdh_pdl_break` / `ema_pullback` / `nr_squeeze` / `torb` / `intraday_momo` / `noise_break` / `vwap_rsi_pullback` のいずれか。
 - `dir`: `long` / `short`。
 - `state`: `forming` / `triggered` / `expired`。
 - `price`: `str.tostring(x, format.mintick)` で整形する。

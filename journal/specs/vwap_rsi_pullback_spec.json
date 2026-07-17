@@ -1,0 +1,78 @@
+{
+  "id": "vwap_rsi_pullback",
+  "market": "QQQ-class liquid ETF (primary evidence); ES/NQ-class index futures listed only as an untested extrapolation, not evidence-backed",
+  "timeframe": "5m intraday bars, entry window 0945-1130 local session time, hard flatten 1500",
+  "data_source": "TradingView OHLCV via the DT VWAP RSI Pullback v1 Pine indicator/strategy pair, cross-checked against docs/research/scalping-20260717/family_vwap.md (Candidate 1) and family_pullback.md (Candidate 1); both trace to the same single QQQ 2024-01..2025-06 study (pinegen.ai/fractiz.com sourcing) reproduced across 5 research passes, i.e. repeated citation of one dataset, not independent replication. The DT confirmation-bar rule (close back on trend side of VWAP only, no up/down candle requirement) and the TP2/50-50 split are DT-contract overlays with no source backing.",
+  "entry": [
+    "Compute session VWAP (volume-weighted hlc3, reset at session start) and RSI(2) on 5-minute bars.",
+    "Inside the entry window only (default 0945-1130 local), count 3 consecutive bar closes on one side of session VWAP to latch trendDir long or short; a later opposite 3-bar run re-latches it.",
+    "Arm a candidate when a bar's [low, high] range crosses session VWAP while RSI(2) < 25 (long, in an uptrend) or RSI(2) > 75 (short, in a downtrend).",
+    "Confirm and enter on the very next bar only if its close lands back on the trend side of VWAP; if it does not, disarm and allow a fresh touch to re-arm later in the window.",
+    "Max 1 trade per direction per day (long and short can each fire once on the same day, never held simultaneously)."
+  ],
+  "exit_take_profit": [
+    "TP1 (50% of position): prior-day high (long) / prior-day low (short) if that level is in the favorable direction from entry and closer than 2x ATR(14); otherwise TP1 = entry +/- 2x ATR(14).",
+    "TP2 (remaining 50%): entry +/- 2x the TP1 distance, same direction (DT-contract overlay; the source study reports only a single TP, not this two-target split)."
+  ],
+  "exit_stop_loss": [
+    "SL = confirmation-bar session VWAP -/+ 1.5x ATR(14), placed beyond VWAP against the trade direction (not beyond entry price)."
+  ],
+  "position_size": "10% of equity per trade (strategy.percent_of_equity, matching the DT ORB v1 reference convention); the source study used a fixed 100-share size, untested at this sizing convention.",
+  "risk": {
+    "max_risk_per_trade": "0.5% equity (position sized so the 1.5x ATR(14) VWAP-relative stop distance corresponds to at most 0.5% equity risk)",
+    "daily_loss_limit": "1.0% equity; stop taking new signals for the remainder of the day after the daily loss limit is hit",
+    "max_concurrent_positions": 1,
+    "kill_switch": [
+      "Live/paper P&L diverges materially from the backtest for 10 consecutive sessions",
+      "TradingView CDP/data feed failure preventing touch/confirmation-bar detection",
+      "Realized fill quality on 5m closes is materially worse than the $0.02/share source cost assumption for 5 consecutive sessions",
+      "Manual override required before any live-sizing promotion beyond paper trading"
+    ]
+  },
+  "backtest_period": "2020-01-01..2026-06-30",
+  "benchmark": [
+    "Buy-and-hold QQQ over the same dates",
+    "Cash at 0% annual return"
+  ],
+  "validation": {
+    "candidate_count": 1,
+    "negative_result_log": "Preserve the parameters and metrics for each failed, negative, rejected, or underperforming variant tested locally (e.g. all-day vs. morning-only entry window, alternate RSI(2) thresholds, alternate ATR multiples for SL/TP1/TP2, QQQ vs. ES/NQ instrument choice, with vs. without the up/down candle confirmation requirement from the source) in journal/backtests/ per variant/instrument/timeframe run, not only in aggregate.",
+    "diagnostic_test": "Before refining any locally-failing variant, record a counter-thesis for the failure cause (e.g. 'the morning-only window is an in-sample cherry-pick and the all-day PF 1.54 is the realistic expectation'), then run one one-variable ablation test (e.g. compare the default 0945-1130 entry window against the full 0945-1500 all-day window on the same signal logic) and record the observed, actual difference in the outcome metric.",
+    "point_in_time_data": "Single-instrument OHLCV bar series; point-in-time universe membership is not applicable (n/a) for a single-symbol setup with a single instrument's own bar history as the only universe. Touch/confirmation logic only uses OHLCV bars available at or before the confirmation bar's close (process_orders_on_close=true). Prior-day high/low uses request.security with the [1] offset + lookahead_on non-repainting pattern, consistent with pine/PINE_CONVENTIONS.md.",
+    "in_sample_period": "2020-01-01..2022-12-31",
+    "out_of_sample_period": "2023-01-01..2024-12-31",
+    "holdout_period": "2025-01-01..2026-06-30",
+    "parameter_freeze": "Freeze the RSI(2) thresholds, 3-bar trend-qualification count, entry window, and SL/TP ATR multiples before opening the 2025-01-01..2026-06-30 holdout window; no holdout-driven retuning of any parameter after the freeze."
+  },
+  "execution": {
+    "primary_fill_model": "Fill at the close of the confirmation bar (process_orders_on_close=true, matching the DT ORB v1 reference convention); TP1/TP2/SL exit orders execute intrabar via strategy.exit stop/limit orders once armed; hard flatten closes at the close of the first bar inside the flatten window (default 1500 local) or at session end, whichever comes first.",
+    "stress_fill_model": "Conservative one-bar-delayed fill at the following bar open for the confirmation-bar entry, to approximate slippage beyond the confirmation-bar close; TP1/TP2/SL orders assume 1 additional adverse tick of slippage versus the primary model.",
+    "commission": "0.005% per side primary (matching the DT ORB v1 reference strategy header) and 0.02% per side stress; the source study's own cost model was a flat $0.02/share commission only, with no slippage or spread modeled, which this spec explicitly does not carry forward as sufficient.",
+    "spread": "1 cent primary (QQQ-class ETF) or 1 tick (NQ/ES-class futures) and 3 cents / 3 ticks adverse stress.",
+    "slippage": "2 ticks primary (matching the strategy header's slippage=2) and 5 ticks adverse stress.",
+    "leverage_funding": "1x gross leverage for the ETF variant; standard index-futures margin (no additional leverage beyond exchange initial margin) for the untested futures variant. Funding 0 bps for the cash-ETF variant; futures funding is embedded in the roll/basis and is not separately modeled."
+  },
+  "robustness": {
+    "top_trade_removal": "Recompute win rate and PF after removing the single largest winning trade, and again after removing the top 5% of winning trades, per instrument.",
+    "regime_splits": [
+      "trend/range (ADX-based classification of the entry-window bars)",
+      "high/low volatility (VIX or realized-vol tercile split)",
+      "morning-window-only (0945-1130) vs. all-day (0945-1500) subset, to directly test the source's disclosed in-sample cherry-pick risk"
+    ],
+    "long_short_decomposition": "Report long and short trade counts, win rates, and average R separately; the setup is symmetric by design (both directions active), so both sides must be reported and compared for asymmetric edge decay.",
+    "concentration_check": "Report the top 1, top 3, and top 5 winning-day PnL contribution as a percentage of total strategy PnL, with a concentration cap of 40% for the top 5 winning days fixed before the holdout period; given this is a Grade-B, single-lineage, unreplicated candidate, high concentration in a small number of days should be treated as a red flag, not disclosed-and-accepted noise."
+  },
+  "paper_trade_period": "2026-07-17..2026-10-17",
+  "review_cadence": "weekly paper review; monthly parameter review",
+  "edge_death_condition": [
+    "PF < 1.0 on the 2025-01-01..2026-06-30 holdout",
+    "Live/paper P&L diverges from the backtest for 10 consecutive sessions",
+    "Realized OOS PF falls below 1.3 (the source study's own recommended rejection threshold before trusting the edge)",
+    "Regime mismatch: edge only present during the post-hoc-selected 0945-1130 sub-window and not in the all-day sample, replicating the exact cherry-pick risk flagged by all 5 source research passes",
+    "Fill-quality gap: realized slippage on 5m confirmation-bar closes materially exceeds the $0.02/share (or equivalent tick-based) cost assumption"
+  ],
+  "human_confirmation": {
+    "required": true,
+    "live_orders": "manual only; this spec checker never places orders. This setup is a research candidate (Grade B, single-lineage, unreplicated) and must not be marked 'adopted' in journal/registry.json until the holdout period above is completed and independently reviewed."
+  }
+}

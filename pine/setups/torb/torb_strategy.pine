@@ -1,0 +1,186 @@
+//@version=6
+strategy("DT TORB v1", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     commission_type=strategy.commission.percent, commission_value=0.005,
+     slippage=2, process_orders_on_close=true, calc_on_every_tick=false)
+
+// Inputs
+string groupSession = "Session"
+sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+orWindow = input.session("0930-0931", "OR window (probe time)", group=groupSession)
+string groupFilters = "Filters"
+maxOrWidthAtr = input.float(2.5, "Max OR width (ATR mult)", minval=0.1, step=0.1, group=groupFilters)
+signalValidityBars = input.int(24, "Signal validity (bars)", minval=1, group=groupFilters)
+
+// Session preset resolution
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+inSession = not na(time(timeframe.period, sessStr, tzStr))
+inOrWindow = not na(time(timeframe.period, orWindow, tzStr))
+// Daily state reset. timeframe.change("D") flips at the exchange's calendar
+// day boundary, not at the configured session's own start/end. This is
+// correct for same-day sessions (Tokyo/London/NY/RTH and any Custom session
+// that starts and ends within one calendar day), but it does NOT correctly
+// reset state for an overnight Custom session (e.g. one that starts before
+// midnight and ends after it) — the reset would fire mid-session instead of
+// at the session boundary. This is an accepted limitation shared by every
+// setup in this library (see pine/PINE_CONVENTIONS.md), not something fixed
+// locally here; overnight Custom sessions are out of scope until the
+// library-wide convention changes. See README.md "Known limitations".
+isNewDay = timeframe.change("D")
+
+atrValue = ta.atr(14)
+
+// OR-window / chart-timeframe mismatch detector (see README.md "5-minute or
+// slower charts do not reproduce a 1-minute OR"). Only meaningful when the
+// configured OR window is exactly 1 minute long, since that is the specific
+// case that silently degrades on any chart timeframe coarser than 1 minute.
+f_sessionMinutes(_s) =>
+    parts = str.split(_s, "-")
+    startRaw = array.size(parts) > 0 ? array.get(parts, 0) : ""
+    endRaw = array.size(parts) > 1 ? array.get(parts, 1) : ""
+    startParts = str.split(startRaw, ":")
+    endParts = str.split(endRaw, ":")
+    startClean = array.size(startParts) > 0 ? array.get(startParts, 0) : startRaw
+    endClean = array.size(endParts) > 0 ? array.get(endParts, 0) : endRaw
+    startMin = str.tonumber(str.substring(startClean, 0, 2)) * 60 + str.tonumber(str.substring(startClean, 2, 4))
+    endMin = str.tonumber(str.substring(endClean, 0, 2)) * 60 + str.tonumber(str.substring(endClean, 2, 4))
+    endMin - startMin
+
+var float orWindowMinutes = f_sessionMinutes(orWindow)
+chartIsOneMinute = timeframe.isminutes and timeframe.multiplier == 1
+orWindowMismatch = orWindowMinutes == 1 and not chartIsOneMinute
+
+// Opening range state
+var float orHigh = na
+var float orLow = na
+var float orWidth = na
+var float orAtrRef = na
+var bool orLocked = false
+var bool orEligible = false
+var int orLockBar = na
+var bool tradedToday = false
+var float activeStop = na
+var float activeTp1 = na
+
+if isNewDay
+    orHigh := na
+    orLow := na
+    orWidth := na
+    orAtrRef := na
+    orLocked := false
+    orEligible := false
+    orLockBar := na
+    tradedToday := false
+
+// Build the opening range during the probe window only
+if inOrWindow
+    orHigh := na(orHigh) ? high : math.max(orHigh, high)
+    orLow := na(orLow) ? low : math.min(orLow, low)
+    orLocked := false
+    orEligible := false
+    orLockBar := na
+    orWidth := na
+    orAtrRef := na
+
+// Lock the range on the first bar after the probe window closes.
+// ATR eligibility is frozen at lock time so it cannot flip mid-session.
+if inOrWindow[1] and not inOrWindow and not na(orHigh) and not na(orLow)
+    orLocked := true
+    orLockBar := bar_index
+    orWidth := orHigh - orLow
+    orAtrRef := atrValue
+    orEligible := orWidth > 0 and not na(orAtrRef) and orWidth <= orAtrRef * maxOrWidthAtr
+
+// Signal validity window = first N confirmed bars after lock (strict "< N").
+barsSinceLock = orLocked and not na(orLockBar) ? bar_index - orLockBar : na
+validityOk = orLocked and orEligible and not na(barsSinceLock) and barsSinceLock < signalValidityBars
+
+// Entry trigger: first confirmed bar CLOSING outside the locked OR range.
+longSignal = inSession and validityOk and not tradedToday and close > orHigh
+shortSignal = inSession and validityOk and not tradedToday and close < orLow
+
+// Entries and TP1/runner exits are placed in the same signal block, using
+// the SL/TP prices already computed on this bar, so the bracket is queued
+// together with the entry order. Guarding the exits with a separate
+// `strategy.position_size` check (as a later, independent if-block) leaves
+// the position unprotected for one full bar: with process_orders_on_close,
+// strategy.position_size does not reflect a same-bar entry until the
+// following bar's script execution, so a position-size-gated exit block
+// only starts working a bar late. Once placed here, strategy.exit() remains
+// a working order across subsequent bars without needing to be re-issued
+// every bar (the SL/TP prices are fixed at entry and never change).
+if longSignal and strategy.position_size == 0
+    activeStop := orLow
+    activeTp1 := close + orWidth
+    strategy.entry("Long", strategy.long)
+    // TP1: 50% at 1x OR-range extension.
+    strategy.exit("L-TP1", "Long", qty_percent=50, stop=activeStop, limit=activeTp1)
+    // Runner: remaining 50% held with only a protective stop (no TP2 limit
+    // order) — TORB's tested exit is EOD flat, approximated by the
+    // session-close strategy.close_all below, not a fixed price target.
+    strategy.exit("L-Runner", "Long", qty_percent=50, stop=activeStop)
+    tradedToday := true
+
+if shortSignal and strategy.position_size == 0
+    activeStop := orHigh
+    activeTp1 := close - orWidth
+    strategy.entry("Short", strategy.short)
+    strategy.exit("S-TP1", "Short", qty_percent=50, stop=activeStop, limit=activeTp1)
+    strategy.exit("S-Runner", "Short", qty_percent=50, stop=activeStop)
+    tradedToday := true
+
+// EOD / session-end flat — approximates the source study's "hold to close"
+// exit. Detected via the final-session-bar idiom below, NOT the library-wide
+// `inSession[1] and not inSession` convention documented in
+// pine/PINE_CONVENTIONS.md (and still used by the DT ORB v1 reference this
+// setup is derived from). That convention only fires on the first bar
+// *outside* the session, which never exists on an RTH-only chart with no
+// after-hours data — the position would silently carry overnight instead of
+// flattening. `sessionEndBar` instead flags the last bar *inside* the
+// session: its open still qualifies for `inSession` but its close reaches or
+// passes the session end boundary, so `time_close()` no longer qualifies.
+// This divergence from the orb reference is intentional and local to torb;
+// it has not been back-ported to pine/setups/orb.
+sessionEndBar = inSession and na(time_close(timeframe.period, sessStr, tzStr))
+if sessionEndBar
+    strategy.close_all("EOD")
+    activeStop := na
+    activeTp1 := na
+
+// Visual history and levels
+orHighPlot = plot(inOrWindow or orLocked ? orHigh : na, "OR High", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+orLowPlot = plot(inOrWindow or orLocked ? orLow : na, "OR Low", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+fill(orHighPlot, orLowPlot, color=color.new(color.yellow, 90), title="OR Range")
+plotshape(longSignal, title="TORB Long", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), text="TORB L", size=size.tiny)
+plotshape(shortSignal, title="TORB Short", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="TORB S", size=size.tiny)
+
+// Single managed warning label: OR window is configured as a true 1-minute
+// probe but the chart is not a 1-minute chart, so the OR silently degrades
+// to the current chart bar's full range (see README.md). One label instance
+// is created once and then re-anchored to the latest bar every bar via
+// label.set_x/label.set_y, rather than a new label per bar.
+var label orWarnLabel = na
+if orWindowMismatch
+    if na(orWarnLabel)
+        orWarnLabel := label.new(bar_index, high, "TORB: OR window=1m but chart TF=" + timeframe.period + " — OR degrades to chart-bar range (unvalidated variant)", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+    else
+        label.set_x(orWarnLabel, bar_index)
+        label.set_y(orWarnLabel, high)
+else if not na(orWarnLabel)
+    label.delete(orWarnLabel)
+    orWarnLabel := na

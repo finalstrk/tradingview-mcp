@@ -1,0 +1,224 @@
+//@version=6
+indicator("DT Intraday Momentum v1", overlay=true, max_labels_count=50)
+
+// Inputs
+groupSession = "Session"
+sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+openWindow = input.session("0930-1000", "Opening return window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the opening window is auto-derived as [session open, session open + 30min].", group=groupSession)
+decisionWindow = input.session("1530-1600", "Decision window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the decision time is auto-derived as session close - 30min. T = the confirmed bar whose close reaches that time.", group=groupSession)
+
+groupRisk = "Risk"
+slAtrMult = input.float(1.5, "SL (ATR mult)", minval=0.1, step=0.1, group=groupRisk)
+tp1AtrMult = input.float(1.0, "TP1 (ATR mult, 50% off)", minval=0.1, step=0.1, group=groupRisk)
+tp2AtrMultDisplay = input.float(2.0, "TP2 display level (ATR mult, informational only - actual exit is EOD time exit)", minval=0.1, step=0.1, group=groupRisk)
+
+// Session preset resolution (mirrors DT ORB v1 convention)
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+// Fail-closed timeframe guard: the daily decision-bar detection below assumes
+// the decision window boundary aligns to a real chart bar's close. This is
+// only reliable on standard 1m/5m/15m intraday charts. Explicit allowlist
+// (not a "<=15" range check) so odd intraday resolutions that happen to be
+// <=15 (e.g. 2m, 3m, 10m) do not silently pass through unvalidated.
+timeframeOk = timeframe.isintraday and (timeframe.period == "1" or timeframe.period == "5" or timeframe.period == "15")
+
+// Derive the opening-return window and decision window from the resolved
+// session string for preset sessions (Tokyo/London/NY/RTH), instead of
+// relying on fixed wall-clock inputs that silently stop matching on any
+// preset other than the one the defaults were written for (e.g. the
+// 15:30-16:00 decision default never fires on the Tokyo session, which
+// closes at 15:00). Custom preset keeps explicit user-supplied windows,
+// since Custom sessions cannot be assumed to want a +/-30min derivation.
+f_pad2(_n) =>
+    _n < 10 ? "0" + str.tostring(_n) : str.tostring(_n)
+
+f_formatHHMM(_totalMin) =>
+    wrapped = ((_totalMin % 1440) + 1440) % 1440
+    hh = int(wrapped / 60)
+    mm = int(wrapped % 60)
+    f_pad2(hh) + f_pad2(mm)
+
+f_hhmmToMin(_hhmm) =>
+    int(str.tonumber(str.substring(_hhmm, 0, 2))) * 60 + int(str.tonumber(str.substring(_hhmm, 2, 4)))
+
+f_sessionBounds(_s) =>
+    parts = str.split(_s, "-")
+    startRaw = array.size(parts) > 0 ? array.get(parts, 0) : ""
+    endRaw = array.size(parts) > 1 ? array.get(parts, 1) : ""
+    startParts = str.split(startRaw, ":")
+    endParts = str.split(endRaw, ":")
+    startClean = array.size(startParts) > 0 ? array.get(startParts, 0) : startRaw
+    endClean = array.size(endParts) > 0 ? array.get(endParts, 0) : endRaw
+    [f_hhmmToMin(startClean), f_hhmmToMin(endClean)]
+
+[sessStartMin, sessEndMin] = f_sessionBounds(sessStr)
+derivedOpenWindowEndMin = sessStartMin + 30
+derivedDecisionStartMin = sessEndMin - 30
+
+// Coherence check: opening window must sit fully inside the session and end
+// at or before the decision window starts. Only relevant as a fail-closed
+// guard for pathologically short sessions; the four built-in presets are all
+// well over an hour long and will always pass this check.
+windowsCoherent = derivedOpenWindowEndMin > sessStartMin and derivedOpenWindowEndMin <= sessEndMin and derivedDecisionStartMin >= derivedOpenWindowEndMin and derivedDecisionStartMin < sessEndMin and derivedDecisionStartMin >= sessStartMin
+
+isCustomPreset = sessionPreset == "Custom"
+windowsOk = isCustomPreset or windowsCoherent
+effectiveOpenWindow = isCustomPreset ? openWindow : f_formatHHMM(sessStartMin) + "-" + f_formatHHMM(derivedOpenWindowEndMin)
+effectiveDecisionWindow = isCustomPreset ? decisionWindow : f_formatHHMM(derivedDecisionStartMin) + "-" + f_formatHHMM(sessEndMin)
+
+// configOk gates every stateful/signal-producing calculation below. Failing
+// closed here (rather than just on timeframeOk) means an incoherent derived
+// window disables signals entirely instead of running with a bad window.
+configOk = timeframeOk and windowsOk
+
+inSession = configOk and not na(time(timeframe.period, sessStr, tzStr))
+// Close-based window membership (not open-based): these drive the
+// opening-window lock and the decision trigger off the bar whose *close*
+// reaches the window boundary, which is what "first 30-minute return" and
+// "decision at T" actually mean.
+closeInOpenWindow = configOk and not na(time_close(timeframe.period, effectiveOpenWindow, tzStr))
+closeInDecisionWindow = configOk and not na(time_close(timeframe.period, effectiveDecisionWindow, tzStr))
+isNewDay = timeframe.change("D")
+
+// Single managed warning label (not recreated every barstate.islast tick).
+var label configWarnLabel = na
+warnText = not timeframeOk ? "DT Intraday Momentum v1: unsupported timeframe (1m/5m/15m only)" : not windowsOk ? "DT Intraday Momentum v1: derived session windows incoherent for preset '" + sessionPreset + "' - session too short" : na
+if barstate.islast
+    if not na(warnText)
+        if na(configWarnLabel)
+            configWarnLabel := label.new(bar_index, high, warnText, style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
+        else
+            label.set_xy(configWarnLabel, bar_index, high)
+            label.set_text(configWarnLabel, warnText)
+    else if not na(configWarnLabel)
+        label.delete(configWarnLabel)
+        configWarnLabel := na
+
+// Session-open anchor and first-N-minute (opening window) return
+sessionOpenTrigger = inSession and not inSession[1]
+// Fires on the first bar whose close has just left the opening window --
+// i.e. the bar immediately after the window's last member bar.
+openWindowExitTrigger = closeInOpenWindow[1] and not closeInOpenWindow
+// Fires on the first bar whose close reaches the decision window -- i.e. the
+// bar whose confirmed close equals decision time T.
+decisionTrigger = closeInDecisionWindow and not closeInDecisionWindow[1]
+
+var float sessionOpenPrice = na
+var float open30Return = na
+var bool open30Locked = false
+var bool decisionResolved = false
+var bool tradedToday = false
+var string lastDir = "long"
+var float lastEntry = na
+var float lastStop = na
+var float lastTp1 = na
+var float lastTp2 = na
+var label sigLabel = na
+
+if isNewDay
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := na
+    sessionOpenPrice := na
+    open30Return := na
+    open30Locked := false
+    decisionResolved := false
+    tradedToday := false
+    lastDir := "long"
+    lastEntry := na
+    lastStop := na
+    lastTp1 := na
+    lastTp2 := na
+
+// Anchor session open price on the first in-session bar of the day.
+// Using `open` of that bar (not the prior daily close) per the DT logic spec,
+// which defines both returns relative to "session open". `open` is fixed at
+// bar formation and cannot repaint, so this does not need an isconfirmed gate.
+if sessionOpenTrigger
+    sessionOpenPrice := open
+
+// Lock the first-N-minute return using the confirmed close of the LAST bar
+// inside the opening window (close[1] on the first bar after exit), not the
+// close of the bar that follows the window. Gated on barstate.isconfirmed so
+// the lock cannot fire off an still-forming realtime bar.
+if openWindowExitTrigger and not na(sessionOpenPrice) and barstate.isconfirmed
+    open30Return := close[1] / sessionOpenPrice - 1.0
+    open30Locked := true
+
+atrValue = ta.atr(14)
+daySoFarReturn = na(sessionOpenPrice) ? na : close / sessionOpenPrice - 1.0
+
+sameSign = open30Locked and not na(open30Return) and not na(daySoFarReturn) and open30Return != 0.0 and daySoFarReturn != 0.0 and math.sign(open30Return) == math.sign(daySoFarReturn)
+
+f_project(_dir, _px) =>
+    _sl = _dir == "long" ? _px - atrValue * slAtrMult : _px + atrValue * slAtrMult
+    _tp1 = _dir == "long" ? _px + atrValue * tp1AtrMult : _px - atrValue * tp1AtrMult
+    _tp2 = _dir == "long" ? _px + atrValue * tp2AtrMultDisplay : _px - atrValue * tp2AtrMultDisplay
+    [_sl, _tp1, _tp2]
+
+// Decision bar T = the bar whose confirmed close reaches decisionWindow's
+// start time. Gated on barstate.isconfirmed: without this, an intrabar
+// close could flip the decision (and any resulting label/alert) before the
+// bar actually settles, then repaint on the next tick.
+if decisionTrigger and inSession and barstate.isconfirmed
+    decisionResolved := true
+    if sameSign and not tradedToday
+        entryDir = open30Return > 0.0 ? "long" : "short"
+        [sl, tp1, tp2] = f_project(entryDir, close)
+        lastDir := entryDir
+        lastEntry := close
+        lastStop := sl
+        lastTp1 := tp1
+        lastTp2 := tp2
+        tradedToday := true
+
+// Label state and projection while forming (pre-decision, informational only)
+sigState = tradedToday ? "triggered" : decisionResolved ? "expired" : "forming"
+candidateDir = na(open30Return) ? "long" : open30Return >= 0.0 ? "long" : "short"
+[candSl, candTp1, candTp2] = f_project(candidateDir, close)
+labelDir = tradedToday ? lastDir : candidateDir
+labelEntry = tradedToday ? lastEntry : close
+labelStop = tradedToday ? lastStop : candSl
+labelTp1 = tradedToday ? lastTp1 : candTp1
+labelTp2 = tradedToday ? lastTp2 : candTp2
+
+f_sigText(_dir, _state, _entry, _sl, _tp1, _tp2) =>
+    "DT|intraday_momo|" + _dir + "|" + _state + "|entry=" + str.tostring(_entry, format.mintick) + "|sl=" + str.tostring(_sl, format.mintick) + "|tp1=" + str.tostring(_tp1, format.mintick) + "|tp2=" + str.tostring(_tp2, format.mintick)
+
+showLabel = inSession and not na(sessionOpenPrice) and not na(labelEntry) and not na(labelStop) and not na(labelTp1) and not na(labelTp2)
+labelColor = sigState == "triggered" ? color.new(color.green, 0) : sigState == "expired" ? color.new(color.gray, 0) : color.new(color.orange, 0)
+labelStyle = labelDir == "long" ? label.style_label_up : label.style_label_down
+
+if showLabel
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, labelEntry, f_sigText(labelDir, sigState, labelEntry, labelStop, labelTp1, labelTp2), style=labelStyle, color=labelColor, textcolor=color.white)
+
+// Signal events (decision bar only, one per day, mirrors the entry logic
+// above). Gated on barstate.isconfirmed so an alert cannot fire off an
+// intrabar close and then have that bar settle into a different value.
+longSignalEvent = decisionTrigger and inSession and barstate.isconfirmed and sameSign and open30Return > 0.0 and not tradedToday[1]
+shortSignalEvent = decisionTrigger and inSession and barstate.isconfirmed and sameSign and open30Return < 0.0 and not tradedToday[1]
+
+// Visual markers
+plotshape(longSignalEvent, title="Momo Long Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), text="Momo L", size=size.tiny)
+plotshape(shortSignalEvent, title="Momo Short Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="Momo S", size=size.tiny)
+plot(na(sessionOpenPrice) ? na : sessionOpenPrice, title="Session Open", color=color.new(color.blue, 60), style=plot.style_circles)
+
+// Alerts
+alertcondition(longSignalEvent, "DT Intraday Momo Long", "DT Intraday Momentum v1 long signal")
+alertcondition(shortSignalEvent, "DT Intraday Momo Short", "DT Intraday Momentum v1 short signal")

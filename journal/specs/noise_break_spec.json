@@ -1,0 +1,80 @@
+{
+  "id": "noise_break",
+  "market": "futures_index (ES/NQ-class) / SPY-class liquid ETF",
+  "timeframe": "1m-5m intraday bars, RTH session, decision points from 30 minutes after session open through session close",
+  "data_source": "TradingView OHLCV via the DT Noise Area Breakout v1 Pine indicator/strategy pair, cross-checked against the source SSRN Dynamic Noise-Area working paper (Zarattini et al., SPY 1-minute, 2007-2024, cited independently in family_squeeze.md Candidate 2, family_orderflow.md Candidate 2, and family_academic.md Candidate B) for the unadapted band/VWAP logic; no external verification feed for the DT TP1/TP2 overlay or the per-day avgAbsMove fallback, neither of which is validated by any source study",
+  "entry": [
+    "Compute sessionOpen = today's session open price (first in-session bar).",
+    "Compute avgAbsMove = average of |sessionClose / sessionOpen - 1| over the last lookbackDays (default 14) completed sessions (per-day scalar fallback; the source's literal per-time-of-day rolling average was rejected as too fragile for Pine v6 across DST/holiday session-length changes — documented deviation, see README).",
+    "upperBoundary = sessionOpen * (1 + noiseMult * avgAbsMove); lowerBoundary = sessionOpen * (1 - noiseMult * avgAbsMove), noiseMult default 1.0.",
+    "No entries during the first 30 minutes of the session (warmup window) and none until at least minWarmupDays (default 5) completed sessions are in the avgAbsMove history.",
+    "Checkpoint gating (checkpointOnly=true, default): entries can only be evaluated on a confirmed bar whose close time lands on a half-hour checkpoint (HH:00 or HH:30 in the session timezone, minute(time_close, tzStr) % 30 == 0) -- matches the source's fixed half-hour decision-checkpoint evaluation (family_orderflow.md Candidate 2 / family_academic.md Candidate B). At each checkpoint the rule is a level test, not a same-bar cross test: enter long if close > upperBoundary, enter short if close < lowerBoundary, regardless of which earlier bar the price actually crossed the boundary on. Corrected from an earlier ta.crossover/ta.crossunder-only implementation, which required the boundary cross to happen on the exact checkpoint bar and silently skipped valid setups where price broke out between checkpoints and simply remained beyond the boundary at the next checkpoint. Verified for 1m/5m charts with standard session-aligned bar boundaries only; not verified for non-standard bar alignment or timeframes that do not evenly divide 30 minutes.",
+    "checkpointOnly=false switches to the unvalidated continuous-evaluation variant: enter long on ta.crossover(close, upperBoundary), short on ta.crossunder(close, lowerBoundary), evaluated on every confirmed bar close -- no source study backs this mode; must not be used for the adopted/live spec without its own independent validation.",
+    "Max 1 entry per direction per session (max 2 total per session, though in practice usually only one side breaks).",
+    "minWarmupDays is clamped to min(minWarmupDays, lookbackDays) before the history-length check, since moveHistory itself never holds more than lookbackDays entries; an unclamped minWarmupDays greater than lookbackDays would make the setup permanently signal-silent."
+  ],
+  "exit_take_profit": [
+    "TP1: close 50% of the position at 1.0x band width (upperBoundary - sessionOpen, or the mirrored lower distance for shorts) favorable move from entry (DT-contract overlay, not validated by any source study). strategy.exit for TP1/stop is registered in the same script pass as strategy.entry, using the entry-bar's known stop/TP1/TP2 prices, so the entry bar itself carries a protective order rather than only the bar after (Pine only reflects strategy.entry effects on strategy.position_size starting the following script execution, so gating exit-order placement solely on strategy.position_size left the entry bar unprotected in the prior implementation).",
+    "TP2: close the remaining 50% at 2.0x band width favorable move from entry (DT-contract overlay, not validated by any source study); in practice this limit order competes with the VWAP-cross stop and the hard EOD flat below, since the source's real documented exit is 'VWAP/band re-cross or session close,' not a fixed price target. Registered alongside TP1 on the entry bar for the same reason."
+  ],
+  "exit_stop_loss": [
+    "Trailing stop set to max(upperBoundary, sessionVWAP) for longs / min(lowerBoundary, sessionVWAP) for shorts, re-evaluated every bar after entry with a ratchet (long: only rises; short: only falls) -- this mechanically implements the source's stated rule 'exit when price crosses back through max(upper_boundary, VWAP)' for longs / 'min(lower_boundary, VWAP)' for shorts (family_orderflow.md Candidate 2). sessionVWAP is anchored to session start (not the exchange calendar-day boundary) and accumulates price*volume only over in-session bars, corrected from an earlier implementation that reset on the daily boundary and could accumulate pre/post-session bars into the running VWAP on charts that include them. DT-contract judgment call on the ratchet direction, not source-specified either way. The stop can be immediately marketable if the entry-bar band-combined level is already on the wrong side of entry; this is a documented, real possible outcome of the rule as specified, not a bug.",
+    "Hard EOD flat detected by comparing each confirmed in-session bar's time_close (in the session timezone) against the parsed session end time, and flattening on the last bar whose close time reaches or passes it -- corrected from an earlier `inSession[1] and not inSession` transition check, which requires a bar after the session ends to exist on the chart and silently never fires on an RTH-only data feed (matches the DT ORB v1 reference convention's intent and covers the source's 'or session close, whichever first' exit path, without that feed-dependent gap)."
+  ],
+  "position_size": "10% of equity per trade (strategy.percent_of_equity, matching the DT ORB v1 reference convention); risk sized off the VWAP-based stop distance at entry, not a fixed dollar amount.",
+  "risk": {
+    "max_risk_per_trade": "0.5% equity (position sized so the VWAP-distance stop at entry corresponds to at most 0.5% equity risk)",
+    "daily_loss_limit": "1.0% equity; stop taking new signals for the remainder of the session after the daily loss limit is hit (relevant here since up to 2 signals/day can fire, one per direction)",
+    "max_concurrent_positions": 3,
+    "kill_switch": [
+      "Live/paper P&L diverges materially from the backtest for 10 consecutive sessions",
+      "TradingView CDP/data feed failure preventing session-open or VWAP computation",
+      "Manual override required before any live-sizing promotion beyond paper trading"
+    ]
+  },
+  "backtest_period": "2020-01-01..2026-06-30",
+  "benchmark": [
+    "Buy-and-hold ES continuous futures (or SPY) over the same dates",
+    "Cash at 0% annual return"
+  ],
+  "validation": {
+    "candidate_count": 1,
+    "negative_result_log": "Preserve the parameters and metrics for each failed, negative, rejected, or underperforming variant tested locally (e.g. alternate noiseMult values, alternate lookbackDays/minWarmupDays, per-time-of-day band vs. the per-day scalar fallback if later implemented, SPY-ETF vs. index-futures instrument choice) in journal/backtests/ per variant/instrument/timeframe run, not only in aggregate.",
+    "diagnostic_test": "Before refining any locally-failing variant, record a counter-thesis for the failure cause (e.g. 'the per-day scalar avgAbsMove fallback makes the band too wide late in the session and misses the source's intended early-session sensitivity'), then run one one-variable ablation test (e.g. compare a fixed-time-of-day-scaled band multiplier against the flat per-day band) and record the observed, actual difference in the outcome metric.",
+    "point_in_time_data": "Single-instrument system: n/a for universe membership. OHLCV bars and the rolling avgAbsMove history are available at the decision time (confirmed bar close), matching process_orders_on_close=true.",
+    "in_sample_period": "2020-01-01..2022-12-31",
+    "out_of_sample_period": "2023-01-01..2024-12-31",
+    "holdout_period": "2025-01-01..2026-06-30",
+    "parameter_freeze": "Freeze noiseMult, lookbackDays, minWarmupDays, tp1Mult, and tp2Mult before opening the 2025-01-01..2026-06-30 holdout window; no holdout-driven retuning of any parameter after the freeze."
+  },
+  "execution": {
+    "primary_fill_model": "Fill at the close of the confirmed breakout bar (process_orders_on_close=true, matching the DT ORB v1 reference convention); TP/stop exits fill at their triggered stop/limit price; EOD exit fills at the close of the last in-session bar.",
+    "stress_fill_model": "Conservative one-bar-delayed fill at the following bar open, to approximate slippage beyond the confirmed-bar close, and a widened VWAP-stop trigger buffer of 1 tick to approximate stop-order slippage in fast markets.",
+    "commission": "0.005% per side primary (matching the DT ORB v1 reference strategy header) and 0.02% per side stress.",
+    "spread": "1 tick primary (ES/NQ-class index futures) or 1 cent (SPY-class ETF) and 3 ticks / 3 cents adverse stress.",
+    "slippage": "2 ticks primary (matching the strategy header's slippage=2) and 5 ticks adverse stress; note the source paper's own $0.001/share slippage assumption is flagged by two independent write-ups (family_orderflow.md, family_academic.md) as exceptionally optimistic for retail execution, so this spec deliberately uses a more conservative primary assumption than the source.",
+    "leverage_funding": "1x gross leverage for the ETF variant; standard index-futures margin (no additional leverage beyond exchange initial margin) for the futures variant. Funding 0 bps for the cash-ETF variant; futures funding is embedded in the roll/basis and is not separately modeled."
+  },
+  "robustness": {
+    "top_trade_removal": "Recompute annualized return and Sharpe after removing the single largest winning trade, and again after removing the top 5% of winning trades, per instrument — the source's low reported win rate (37-43%) means the strategy likely depends on a small number of large winners, so this check is expected to show high concentration and must be disclosed, not treated as an anomaly.",
+    "regime_splits": [
+      "trend/range (ADX-based classification of the RTH session)",
+      "high/low volatility (VIX or realized-vol tercile split)",
+      "warmup-history depth (minWarmupDays=5-9 vs. >=14 days of avgAbsMove history) to check whether short-history early signals underperform full-history signals"
+    ],
+    "long_short_decomposition": "Report long and short trade counts, win rates, and average R separately for both the futures and ETF variants; this setup is not long-only so both sides must be reported.",
+    "concentration_check": "Report the top 1, top 3, and top 5 winning-day PnL contribution as a percentage of total strategy PnL, with a concentration cap of 40% for the top 5 winning days fixed before the holdout period; given the low reported win rate (37-43%) in the source research, high concentration in a small number of days is expected and must be disclosed, not treated as an anomaly."
+  },
+  "paper_trade_period": "2026-07-17..2026-10-17",
+  "review_cadence": "weekly paper review; monthly parameter review",
+  "edge_death_condition": [
+    "PF < 1.0 on the 2025-01-01..2026-06-30 holdout",
+    "Live/paper P&L diverges from the backtest for 10 consecutive sessions",
+    "Realized OOS Sharpe falls below -0.5 for either the futures or ETF variant",
+    "Regime mismatch: edge only present during a narrow volatility regime rather than persisting across the full holdout, echoing the adjacent GHLZ momentum candidate's documented negative OOS replication (Sharpe -0.628) in the same research sweep"
+  ],
+  "human_confirmation": {
+    "required": true,
+    "live_orders": "manual only; this spec checker never places orders. This setup is a research candidate and must not be marked 'adopted' in journal/registry.json until the holdout period above is completed and independently reviewed."
+  }
+}

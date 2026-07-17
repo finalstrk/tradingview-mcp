@@ -1,0 +1,77 @@
+{
+  "id": "torb",
+  "market": "liquid index futures (ES/NQ-class continuous futures)",
+  "timeframe": "1-minute chart, one decision window per RTH session (5-minute chart supported by the session machinery but does not reproduce a true 1-minute probe window; treat as a separate unvalidated variant)",
+  "data_source": "TradingView OHLCV via the DT TORB v1 Pine indicator/strategy pair, cross-checked against the source academic paper (Chan et al., IEEE Access 10.1109/ACCESS.2019.2899177, 'Timely Opening Range Breakout') for the unadapted entry logic; no external verification feed for the DT SL/TP1/TP2 overlay, which is untested by the source",
+  "entry": [
+    "Build the opening range (OR) high/low from the probe window (default 09:30-09:31 ET, 1-minute chart) at RTH session open.",
+    "Lock OR high/low at the first bar after the probe window closes. Freeze the ATR(14) eligibility check at lock time: reject the session (no signal, no label) if orWidth <= 0, ATR is na, or orWidth > ATR(14) * maxOrWidthAtr (default multiplier 2.5).",
+    "On the first confirmed bar within the signal validity window (default 24 bars after lock, strict '< N' bound) whose close is above the locked OR high, enter long at that bar's close. If the close is below the locked OR low, enter short at that bar's close.",
+    "Use a direct close-vs-range comparison, not ta.crossover()/ta.crossunder(), so a same-bar gap-and-close-outside the range still qualifies as the first eligible breakout.",
+    "Exactly one entry per session per instrument; no re-entry after the first qualifying breakout even if price re-crosses the range.",
+    "No new entry once the signal validity window has elapsed without a breakout (session state becomes 'expired'), and no new entry after RTH session end."
+  ],
+  "exit_take_profit": [
+    "TP1: close 50% of the position at entry +/- 1.0x the locked OR-range width (DT-contract overlay, not validated by the source study, which has no take-profit).",
+    "TP2 / remainder: hold the remaining 50% with only the protective stop attached; no TP2 limit order is placed. The strategy flattens the whole position at RTH session close (matches the source's tested 'run to EOD, no take-profit' exit). The DT label's tp2 field is a display-only 2x-range reference price, not an executable order target."
+  ],
+  "exit_stop_loss": [
+    "Protective stop at the opposite side of the locked OR range (long stops at OR low, short stops at OR high), applied to the full position at entry and to the TP1 remainder until the EOD close (DT-contract overlay; the source study has no native stop-loss and lets losers run to EOD like winners)."
+  ],
+  "position_size": "10% of equity per trade (strategy.percent_of_equity, matching the DT ORB v1 reference convention); risk sized off the OR-range SL distance, not a fixed dollar amount.",
+  "risk": {
+    "max_risk_per_trade": "0.5% equity (position sized so the OR-range stop distance corresponds to at most 0.5% equity risk)",
+    "daily_loss_limit": "1.0% equity; stop taking new signals for the remainder of the day after the daily loss limit is hit (moot in practice since only 1 signal fires per instrument per day, but applies when multiple instrument instances are run concurrently)",
+    "max_concurrent_positions": 3,
+    "kill_switch": [
+      "Live/paper P&L diverges materially from the SL/TP1/TP2-overlay backtest for 10 consecutive sessions",
+      "TradingView CDP/data feed failure preventing OR-lock or breakout-bar detection",
+      "Manual override required before any live-sizing promotion beyond paper trading"
+    ]
+  },
+  "backtest_period": "2020-01-01..2026-06-30",
+  "benchmark": [
+    "Buy-and-hold ES continuous futures (or NQ, matching the traded instrument) over the same dates",
+    "Cash at 0% annual return"
+  ],
+  "validation": {
+    "candidate_count": 1,
+    "negative_result_log": "Preserve the parameters and metrics for each failed, negative, rejected, or underperforming variant tested locally (e.g. alternate probe-window lengths, alternate max-OR-width-ATR multipliers, alternate signal-validity-bar counts, ES vs. NQ instrument choice) in journal/backtests/ per variant/instrument run, not only in aggregate.",
+    "diagnostic_test": "Before refining any locally-failing variant, record a counter-thesis for the failure cause (e.g. 'the TP1/TP2 overlay is cutting the EOD-runner tail that produced the source paper's edge, consistent with the family_risk.md GAORB TP-scaling finding'), then run one one-variable ablation test (e.g. remove the TP1 partial exit and compare only-EOD-exit performance against the same signal set) and record the observed, actual difference in the outcome metric.",
+    "point_in_time_data": "Single-instrument system: n/a for universe membership. OHLCV bars are available at the decision time T, matching process_orders_on_close=true. Signal detection additionally requires barstate.isconfirmed on the decision bar.",
+    "in_sample_period": "2020-01-01..2022-12-31",
+    "out_of_sample_period": "2023-01-01..2024-12-31",
+    "holdout_period": "2025-01-01..2026-06-30",
+    "parameter_freeze": "Freeze the probe-window length, max-OR-width ATR multiplier, and signal-validity-bar count before opening the 2025-01-01..2026-06-30 holdout window; no holdout-driven retuning of any parameter after the freeze."
+  },
+  "execution": {
+    "primary_fill_model": "Fill at the close of the first confirmed bar that closes outside the locked OR range (process_orders_on_close=true, matching the DT ORB v1 reference convention); EOD exit fills at the close of the last in-session bar.",
+    "stress_fill_model": "Conservative one-bar-delayed fill at the following bar open, to approximate slippage on an OR-break entry, historically one of the highest-slippage moments of the session.",
+    "commission": "0.005% per side primary (matching the DT ORB v1 reference strategy header) and 0.02% per side stress.",
+    "spread": "1 tick primary (ES/NQ-class index futures) and 3 ticks adverse stress.",
+    "slippage": "2 ticks primary (matching the strategy header's slippage=2) and 5 ticks adverse stress, reflecting that OR-break entries are stop-triggered at a high-volatility moment.",
+    "leverage_funding": "1x gross leverage; standard index-futures margin (no additional leverage beyond exchange initial margin). Funding 0 bps; futures funding is embedded in the roll/basis and is not separately modeled."
+  },
+  "robustness": {
+    "top_trade_removal": "Recompute annualized return and Sharpe after removing the single largest winning trade, and again after removing the top 5% of winning trades, per instrument.",
+    "regime_splits": [
+      "trend/range (ADX-based classification of the RTH session)",
+      "high/low volatility (ATR(14)-at-lock tercile split, since the OR-width filter is ATR-relative)",
+      "pre-2023 vs. 2023-2026H1 (checks whether the 13+ year gap since the source paper's 2013 sample end has degraded the edge, per the 'no OOS beyond 2013' caveat in README.md)"
+    ],
+    "long_short_decomposition": "Report long and short trade counts, win rates, and average R separately; this setup is not long-only so both sides must be reported.",
+    "concentration_check": "Report the top 1, top 3, and top 5 winning-day PnL contribution as a percentage of total strategy PnL, with a concentration cap of 40% for the top 5 winning days fixed before the holdout period. Given the source paper's core edge comes from unlimited EOD-runner upside (which the DT TP1/TP2 overlay partially caps), high concentration in a small number of large-runner days is expected and must be disclosed, not treated as an anomaly."
+  },
+  "paper_trade_period": "2026-07-17..2026-10-17",
+  "review_cadence": "weekly paper review; monthly parameter review",
+  "edge_death_condition": [
+    "PF < 1.0 on the 2025-01-01..2026-06-30 holdout",
+    "Live/paper P&L diverges from the SL/TP1/TP2-overlay backtest for 10 consecutive sessions",
+    "Realized OOS Sharpe falls below -1.0, or the S&P/DJIA-style sub-period instability documented in the source paper (non-significant p=14.6% sub-period) reappears in this instrument's data",
+    "Regime mismatch: edge only present during a narrow historical sub-window (e.g. only positive pre-2023) rather than persisting across the full holdout"
+  ],
+  "human_confirmation": {
+    "required": true,
+    "live_orders": "manual only; this spec checker never places orders. This setup is a research candidate and must not be marked 'adopted' in journal/registry.json until the holdout period above is completed and independently reviewed."
+  }
+}
