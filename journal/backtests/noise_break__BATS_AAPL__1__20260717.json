@@ -1,0 +1,33 @@
+{
+  "setup": "noise_break",
+  "symbol": "BATS:AAPL",
+  "market": "stocks_us",
+  "tf": "1",
+  "date": "2026-07-17",
+  "period": {
+    "from": "2026-04-27T13:30:00.000Z",
+    "to": "2026-07-17T15:01:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "lookbackDays": 14,
+    "minWarmupDays": 5,
+    "noiseMult": 1.0,
+    "tp1Mult": 1.0,
+    "tp2Mult": 2.0,
+    "checkpointOnly": true,
+    "default_qty_type": "percent_of_equity",
+    "default_qty_value": 10
+  },
+  "trades": 85,
+  "winrate": 0.247059,
+  "winrate_pct": 24.71,
+  "pf": 1.073178,
+  "max_dd_pct": 0.28,
+  "net_profit_pct": 0.05,
+  "avg_trade": 5.820162,
+  "currency": "USD",
+  "verdict": "insufficient_data",
+  "criteria": "n<100",
+  "notes": "Requested NASDAQ:AAPL resolved to BATS:AAPL (alternate/delayed feed variant). RTH preset, default 10% equity sizing (non-zero trades, no override needed). Strategy Tester history (2026-04-27 to 2026-07-17, ~2.7 months) is deeper than the 300-bar OHLCV chart cap. n=85 < 100, so insufficient_data regardless of WR/PF/maxDD values."
+}

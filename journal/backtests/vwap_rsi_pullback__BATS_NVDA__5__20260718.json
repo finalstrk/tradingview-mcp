@@ -1,0 +1,35 @@
+{
+  "setup": "vwap_rsi_pullback",
+  "symbol": "BATS:NVDA",
+  "requested_symbol": "NASDAQ:NVDA",
+  "market": "stocks_us",
+  "tf": "5",
+  "date": "2026-07-18",
+  "period": {
+    "from": "2025-07-07T13:30:00.000Z",
+    "to": "2026-07-17T15:15:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "entryStartOffsetMin": 15,
+    "entryWindowDurationMin": 105,
+    "flattenBeforeCloseMin": 60,
+    "rsiLength": 2,
+    "rsiOversold": 25.0,
+    "rsiOverbought": 75.0,
+    "atrLength": 14,
+    "slAtrMult": 1.5,
+    "tp1MaxAtrMult": 2.0
+  },
+  "trades": 190,
+  "winrate": 0.463158,
+  "winrate_pct": 46.32,
+  "pf": 0.842431,
+  "max_dd_pct": 1.01,
+  "net_profit_pct": -0.47,
+  "avg_trade": -24.595794,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "(wr>=45&pf>=1.3)|(wr>=35&pf>=1.6)",
+  "notes": "RTH preset, default 10% equity sizing. Requested NASDAQ:NVDA resolved to BATS:NVDA. n=190 >= 100 (sufficient). WR 46.32% clears the 45% branch but PF 0.84 misses the 1.3 threshold; second branch (wr>=35&pf>=1.6) also fails on PF. maxDD 1.01% well under 15% cap. Long and short sides both negative PF (0.88 and 0.81 respectively), no single-side distortion."
+}

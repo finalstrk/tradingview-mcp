@@ -1,0 +1,33 @@
+{
+  "setup": "noise_break",
+  "symbol": "BATS:TSLA",
+  "market": "stocks_us",
+  "tf": "1",
+  "date": "2026-07-17",
+  "period": {
+    "from": "2026-04-27T13:30:00.000Z",
+    "to": "2026-07-17T15:03:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "lookbackDays": 14,
+    "minWarmupDays": 5,
+    "noiseMult": 1.0,
+    "tp1Mult": 1.0,
+    "tp2Mult": 2.0,
+    "checkpointOnly": true,
+    "default_qty_type": "percent_of_equity",
+    "default_qty_value": 10
+  },
+  "trades": 66,
+  "winrate": 0.363636,
+  "winrate_pct": 36.36,
+  "pf": 2.229888,
+  "max_dd_pct": 0.21,
+  "net_profit_pct": 0.87,
+  "avg_trade": 131.08656,
+  "currency": "USD",
+  "verdict": "insufficient_data",
+  "criteria": "n<100",
+  "notes": "Requested NASDAQ:TSLA resolved to BATS:TSLA (alternate/delayed feed variant). RTH preset, default 10% equity sizing. n=66 < 100, so insufficient_data despite WR 36.36% / PF 2.23 which would otherwise satisfy the wr>=35&pf>=1.6 criterion -- the n>=100 gate is not met and this run does not count toward the market majority."
+}

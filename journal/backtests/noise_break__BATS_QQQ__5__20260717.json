@@ -1,0 +1,33 @@
+{
+  "setup": "noise_break",
+  "symbol": "BATS:QQQ",
+  "market": "stocks_us",
+  "tf": "5",
+  "date": "2026-07-17",
+  "period": {
+    "from": "2025-07-07T13:30:00.000Z",
+    "to": "2026-07-17T15:00:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "lookbackDays": 14,
+    "minWarmupDays": 5,
+    "noiseMult": 1.0,
+    "tp1Mult": 1.0,
+    "tp2Mult": 2.0,
+    "checkpointOnly": true,
+    "default_qty_type": "percent_of_equity",
+    "default_qty_value": 10
+  },
+  "trades": 370,
+  "winrate": 0.240541,
+  "winrate_pct": 24.05,
+  "pf": 0.93094,
+  "max_dd_pct": 0.34,
+  "net_profit_pct": -0.11,
+  "avg_trade": -3.078445,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "wr>=45&pf>=1.3 (or wr>=35&pf>=1.6)",
+  "notes": "INFORMATIONAL / supplementary run -- NASDAQ:QQQ is not part of the registry stocks_us 3-symbol verification set (AAPL/NVDA/TSLA) and does not count toward the market verdict. Included because the setup's research evidence source is SPY/QQQ-class indices (family_orderflow.md). Requested NASDAQ:QQQ resolved to BATS:QQQ. RTH preset, default 10% equity sizing. n=370 (sufficient). WR 24.05% and PF 0.93 fail every threshold combination, consistent with the AAPL/NVDA/TSLA 5m results -- the source-index evidence does not replicate on this account's data/feed."
+}

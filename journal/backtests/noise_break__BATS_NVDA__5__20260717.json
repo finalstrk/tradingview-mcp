@@ -1,0 +1,33 @@
+{
+  "setup": "noise_break",
+  "symbol": "BATS:NVDA",
+  "market": "stocks_us",
+  "tf": "5",
+  "date": "2026-07-17",
+  "period": {
+    "from": "2025-07-07T13:30:00.000Z",
+    "to": "2026-07-17T15:00:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "lookbackDays": 14,
+    "minWarmupDays": 5,
+    "noiseMult": 1.0,
+    "tp1Mult": 1.0,
+    "tp2Mult": 2.0,
+    "checkpointOnly": true,
+    "default_qty_type": "percent_of_equity",
+    "default_qty_value": 10
+  },
+  "trades": 402,
+  "winrate": 0.236318,
+  "winrate_pct": 23.63,
+  "pf": 0.885605,
+  "max_dd_pct": 0.81,
+  "net_profit_pct": -0.51,
+  "avg_trade": -12.621926,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "wr>=45&pf>=1.3 (or wr>=35&pf>=1.6)",
+  "notes": "Requested NASDAQ:NVDA resolved to BATS:NVDA. RTH preset, default 10% equity sizing. n=402 (sufficient). WR 23.63% and PF 0.89 fail every WR/PF threshold combination. Long leg roughly breakeven (PF 1.01), short leg loses (PF 0.80)."
+}

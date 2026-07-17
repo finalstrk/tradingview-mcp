@@ -1,0 +1,35 @@
+{
+  "setup": "vwap_rsi_pullback",
+  "symbol": "BATS:TSLA",
+  "requested_symbol": "NASDAQ:TSLA",
+  "market": "stocks_us",
+  "tf": "5",
+  "date": "2026-07-18",
+  "period": {
+    "from": "2025-07-07T13:30:00.000Z",
+    "to": "2026-07-17T15:20:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "entryStartOffsetMin": 15,
+    "entryWindowDurationMin": 105,
+    "flattenBeforeCloseMin": 60,
+    "rsiLength": 2,
+    "rsiOversold": 25.0,
+    "rsiOverbought": 75.0,
+    "atrLength": 14,
+    "slAtrMult": 1.5,
+    "tp1MaxAtrMult": 2.0
+  },
+  "trades": 184,
+  "winrate": 0.423913,
+  "winrate_pct": 42.39,
+  "pf": 0.980191,
+  "max_dd_pct": 1.17,
+  "net_profit_pct": -0.07,
+  "avg_trade": -3.821736,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "(wr>=45&pf>=1.3)|(wr>=35&pf>=1.6)",
+  "notes": "RTH preset, default 10% equity sizing. Requested NASDAQ:TSLA resolved to BATS:TSLA. Top-line metrics API reported trade_count=185 vs all.total_trades=184 (winning 78 + losing 106 = 184); used 184 as the canonical n, matching the win/loss breakdown. n=184 >= 100 (sufficient). WR 42.39% misses the 45% branch; PF 0.98 misses both the 1.3 and 1.6 thresholds. maxDD 1.17% well under 15% cap. Long side alone was profitable (PF 1.21, 90 trades, +0.35% net) but short side was negative (PF 0.78, 94 trades, -0.42% net), netting to a small overall loss -- closest to passing of the three symbols but still fails on the combined PF."
+}

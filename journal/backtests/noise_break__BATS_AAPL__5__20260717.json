@@ -1,0 +1,33 @@
+{
+  "setup": "noise_break",
+  "symbol": "BATS:AAPL",
+  "market": "stocks_us",
+  "tf": "5",
+  "date": "2026-07-17",
+  "period": {
+    "from": "2025-07-07T13:30:00.000Z",
+    "to": "2026-07-17T15:00:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "lookbackDays": 14,
+    "minWarmupDays": 5,
+    "noiseMult": 1.0,
+    "tp1Mult": 1.0,
+    "tp2Mult": 2.0,
+    "checkpointOnly": true,
+    "default_qty_type": "percent_of_equity",
+    "default_qty_value": 10
+  },
+  "trades": 393,
+  "winrate": 0.21374,
+  "winrate_pct": 21.37,
+  "pf": 0.869999,
+  "max_dd_pct": 0.94,
+  "net_profit_pct": -0.39,
+  "avg_trade": -9.814946,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "wr>=45&pf>=1.3 (or wr>=35&pf>=1.6)",
+  "notes": "Requested NASDAQ:AAPL resolved to BATS:AAPL. RTH preset, default 10% equity sizing. n=393 (sufficient). WR 21.37% and PF 0.87 both fail every WR/PF threshold combination; long leg near breakeven (PF 0.96), short leg weak (PF 0.76)."
+}

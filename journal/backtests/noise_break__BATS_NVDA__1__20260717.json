@@ -1,0 +1,33 @@
+{
+  "setup": "noise_break",
+  "symbol": "BATS:NVDA",
+  "market": "stocks_us",
+  "tf": "1",
+  "date": "2026-07-17",
+  "period": {
+    "from": "2026-04-27T13:30:00.000Z",
+    "to": "2026-07-17T15:02:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "lookbackDays": 14,
+    "minWarmupDays": 5,
+    "noiseMult": 1.0,
+    "tp1Mult": 1.0,
+    "tp2Mult": 2.0,
+    "checkpointOnly": true,
+    "default_qty_type": "percent_of_equity",
+    "default_qty_value": 10
+  },
+  "trades": 68,
+  "winrate": 0.205882,
+  "winrate_pct": 20.59,
+  "pf": 0.396399,
+  "max_dd_pct": 0.74,
+  "net_profit_pct": -0.74,
+  "avg_trade": -108.771582,
+  "currency": "USD",
+  "verdict": "insufficient_data",
+  "criteria": "n<100",
+  "notes": "Requested NASDAQ:NVDA resolved to BATS:NVDA (alternate/delayed feed variant). RTH preset, default 10% equity sizing. n=68 < 100, so insufficient_data regardless of WR/PF/maxDD values."
+}

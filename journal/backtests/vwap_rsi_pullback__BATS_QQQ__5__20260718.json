@@ -1,0 +1,35 @@
+{
+  "setup": "vwap_rsi_pullback",
+  "symbol": "BATS:QQQ",
+  "requested_symbol": "NASDAQ:QQQ",
+  "market": "stocks_us",
+  "tf": "5",
+  "date": "2026-07-18",
+  "period": {
+    "from": "2025-07-07T13:30:00.000Z",
+    "to": "2026-07-17T15:20:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "entryStartOffsetMin": 15,
+    "entryWindowDurationMin": 105,
+    "flattenBeforeCloseMin": 60,
+    "rsiLength": 2,
+    "rsiOversold": 25.0,
+    "rsiOverbought": 75.0,
+    "atrLength": 14,
+    "slAtrMult": 1.5,
+    "tp1MaxAtrMult": 2.0
+  },
+  "trades": 212,
+  "winrate": 0.495283,
+  "winrate_pct": 49.53,
+  "pf": 0.998006,
+  "max_dd_pct": 0.22,
+  "net_profit_pct": 0,
+  "avg_trade": -0.1458,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "(wr>=45&pf>=1.3)|(wr>=35&pf>=1.6) [informational only, not part of registry majority vote]",
+  "notes": "INFORMATIONAL / SUPPLEMENTARY RUN, not part of the stocks_us registry symbol set (NASDAQ:AAPL/NVDA/TSLA) and excluded from the market majority vote. QQQ is the research evidence source itself (source study: single 2024-2025 QQQ study, morning window 0945-1130 claimed strongest, PF 1.5+). The strategy's default entry window (entryStartOffsetMin=15 + entryWindowDurationMin=105 on the 0930 RTH open) already resolves to 0945-1130, i.e. this run used the source's claimed strongest window, not a mismatched window. Requested NASDAQ:QQQ resolved to BATS:QQQ. n=212 >= 100 (sufficient). Result: WR 49.53% (highest of the 4 symbols tested) but PF 0.998, essentially breakeven (net profit -$30.91 = approx -0.003% of initial capital, avg_trade -$0.15). This falls far short of the source's claimed PF 1.5+ for the morning window and does not qualify as a pass under either registry threshold branch. Long and short sides both hover near PF 1.0 (1.01 and 0.98), no single-side distortion. The QQQ result is directionally consistent with the 3 registry symbols (all near/below PF 1.0) despite being closest to breakeven; it does not corroborate the source study's claimed edge on this account's data/commission/slippage assumptions."
+}

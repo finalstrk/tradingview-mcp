@@ -1,0 +1,35 @@
+{
+  "setup": "vwap_rsi_pullback",
+  "symbol": "BATS:AAPL",
+  "requested_symbol": "NASDAQ:AAPL",
+  "market": "stocks_us",
+  "tf": "5",
+  "date": "2026-07-18",
+  "period": {
+    "from": "2025-07-07T13:30:00.000Z",
+    "to": "2026-07-17T15:15:00.000Z"
+  },
+  "inputs": {
+    "sessionPreset": "RTH",
+    "entryStartOffsetMin": 15,
+    "entryWindowDurationMin": 105,
+    "flattenBeforeCloseMin": 60,
+    "rsiLength": 2,
+    "rsiOversold": 25.0,
+    "rsiOverbought": 75.0,
+    "atrLength": 14,
+    "slAtrMult": 1.5,
+    "tp1MaxAtrMult": 2.0
+  },
+  "trades": 234,
+  "winrate": 0.42735,
+  "winrate_pct": 42.74,
+  "pf": 0.89134,
+  "max_dd_pct": 0.72,
+  "net_profit_pct": -0.28,
+  "avg_trade": -12.1523,
+  "currency": "USD",
+  "verdict": "fail",
+  "criteria": "(wr>=45&pf>=1.3)|(wr>=35&pf>=1.6)",
+  "notes": "RTH preset, default 10% equity sizing. Requested NASDAQ:AAPL resolved to BATS:AAPL. n=234 >= 100 (sufficient). WR 42.74% misses the 45% branch; PF 0.89 misses both the 1.3 and 1.6 PF thresholds, so both criteria branches fail. maxDD 0.72% well under 15% cap. Long side alone was marginally profitable (PF 1.05, 127 trades) but short side was strongly negative (PF 0.72, 107 trades), dragging the combined result to fail. Spot-checked first 20 trades via data_get_trades: no outlier/single-trade distortion, losses and wins are of comparable, modest magnitude."
+}

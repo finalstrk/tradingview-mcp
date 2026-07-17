@@ -2,6 +2,29 @@
 
 Last updated: 2026-07-17
 
+## Scalping verification round 2 + intraday_momo_pure (2026-07-18)
+
+- setup-verify 実施結果（stocks_us、BATS:* 解決を証跡記録）:
+  - `noise_break` / stocks_us: **rejected**。5分足 n=379-402 で PF 0.87-1.14 / WR 21-25%。
+    TSLA のみ黒字だが WR 基準未達。1分足は履歴 ~2.7ヶ月で insufficient（n-gate 優先を
+    Codex レビューで確認）。QQQ は参考扱いで投票外。証跡8本。
+  - `vwap_rsi_pullback` / stocks_us: **rejected**。5分足 n=184-234 で PF 0.84-0.98。
+    重要発見: 源泉銘柄 QQQ ×源泉の朝窓（0945-1130）でも PF 0.998 の完全損益分岐
+    （源泉主張は朝窓 PF 2.08）→ 源泉研究自体の OOS 減衰シグナルとして registry notes に
+    記録。long-only 分解でも救済不可。証跡4本。
+  - adopted は引き続き 0件。検証済み: momo(fx/futures)・noise_break(stocks_us)・
+    vwap_rsi_pullback(stocks_us) 全て rejected、torb(futures) insufficient_data。
+- `intraday_momo_pure` を新規実装（candidate 登録済み）: SL/TP1 オーバーレイなし・
+  EODのみの源泉忠実 ablation 変種。災害ストップは 0=OFF 既定・有効化 run は別変種扱い。
+  ラベルは `sl=none`/`tp1=none`/`tp2=none` エンコード（PINE_CONVENTIONS の price-only
+  文法からの逸脱は README に記録、規約側の追記は将来課題）。sizing は Fixed 1 既定。
+  Codex (gpt-5.6-sol high) 設計パス採用。spec-check 通過。契約テスト SETUP_IDS に追加。
+- 検証エージェント定義 `.claude/agents/codex-setup-verifier.md` を永続化。
+- Codex model 注記: このアカウント（ChatGPT 認証）は `gpt-5.6` 単体を受け付けず、
+  実行は全て `gpt-5.6-sol` (effort high)。
+- torb 再検証は先物リアルタイムデータ契約が前提のため保留（外部前提）。
+- test:unit 491/491 PASS。momo_pure の live コンパイル検証は実施中/直後に記録。
+
 ## Scalping evidence research + 4 candidate setups (2026-07-17) — VERIFICATION ROUND 1 DONE
 
 - setup-verify 実施結果（2026-07-17 夜）:
