@@ -68,3 +68,30 @@ test('bottom-panel close never reports closed when no callable close path exists
     /bottomWidgetBar close not available/,
   );
 });
+
+test('watchlist panel supports the current localized sidebar button', async () => {
+  let clickCalls = 0;
+  const button = {
+    getAttribute() { return null; },
+    classList: {
+      contains() { return false; },
+      toString() { return ''; },
+    },
+    click() { clickCalls += 1; },
+  };
+  const { openPanel } = await loadUi({
+    window: {},
+    document: {
+      querySelector(selector) {
+        if (selector === '[data-name="base"]') return button;
+        if (selector.includes('layout__area--right')) return { offsetWidth: 0 };
+        return null;
+      },
+    },
+  });
+
+  const result = await openPanel({ panel: 'watchlist', action: 'open' });
+
+  assert.equal(result.performed, 'opened');
+  assert.equal(clickCalls, 1);
+});

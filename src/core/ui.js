@@ -61,7 +61,12 @@ export async function openPanel({ panel, action }) {
     return { success: true, panel, action, was_open: result?.was_open ?? false, performed: result?.performed ?? 'unknown' };
   } else {
     const selectorMap = {
-      'watchlist': { dataName: 'base-watchlist-widget-button', ariaLabel: 'Watchlist' },
+      'watchlist': {
+        dataName: 'base-watchlist-widget-button',
+        ariaLabel: 'Watchlist',
+        alternateDataName: 'base',
+        alternateAriaLabel: 'ウォッチリスト・詳細・ニュース',
+      },
       'alerts': { dataName: 'alerts-button', ariaLabel: 'Alerts' },
       'trading': { dataName: 'trading-button', ariaLabel: 'Trading Panel' },
     };
@@ -70,8 +75,13 @@ export async function openPanel({ panel, action }) {
       (function() {
         var dataName = ${JSON.stringify(sel.dataName)};
         var ariaLabel = ${JSON.stringify(sel.ariaLabel)};
+        var alternateDataName = ${JSON.stringify(sel.alternateDataName || null)};
+        var alternateAriaLabel = ${JSON.stringify(sel.alternateAriaLabel || null)};
         var action = ${JSON.stringify(action)};
-        var btn = document.querySelector('[data-name="' + dataName + '"]') || document.querySelector('[aria-label="' + ariaLabel + '"]');
+        var btn = document.querySelector('[data-name="' + dataName + '"]')
+          || document.querySelector('[aria-label="' + ariaLabel + '"]')
+          || (alternateDataName ? document.querySelector('[data-name="' + alternateDataName + '"]') : null)
+          || (alternateAriaLabel ? document.querySelector('[aria-label="' + alternateAriaLabel + '"]') : null);
         if (!btn) return { error: 'Button not found for panel: ' + ${JSON.stringify(panel)} };
         var isActive = btn.getAttribute('aria-pressed') === 'true' || btn.classList.contains('isActive') || btn.classList.toString().indexOf('active') !== -1 || btn.classList.toString().indexOf('Active') !== -1;
         var rightArea = document.querySelector('[class*="layout__area--right"]');
