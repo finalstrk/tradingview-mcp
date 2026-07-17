@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-07-17",
+  "updated": "2026-07-18",
   "setups": [
     {
       "id": "orb",
@@ -541,14 +541,25 @@
           "notes": "Grade B (SSRN + 3 independent write-ups, no independent OOS). Entries gated to HH:00/HH:30 checkpoints per source; see docs/research/scalping-20260717/family_orderflow.md."
         },
         "stocks_us": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "1",
             "5"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null
+          "evidence": [
+            "journal/backtests/noise_break__BATS_AAPL__1__20260717.json",
+            "journal/backtests/noise_break__BATS_AAPL__5__20260717.json",
+            "journal/backtests/noise_break__BATS_NVDA__1__20260717.json",
+            "journal/backtests/noise_break__BATS_NVDA__5__20260717.json",
+            "journal/backtests/noise_break__BATS_TSLA__1__20260717.json",
+            "journal/backtests/noise_break__BATS_TSLA__5__20260717.json",
+            "journal/backtests/noise_break__BATS_QQQ__1__20260717.json",
+            "journal/backtests/noise_break__BATS_QQQ__5__20260717.json"
+          ],
+          "bt_winrate": 0.236318,
+          "bt_pf": 0.885605,
+          "updated": "2026-07-17",
+          "notes": "RTH preset, default 10% equity sizing (non-zero trades on every symbol, no override needed). Registry set NASDAQ:AAPL/NVDA/TSLA all resolved to BATS:* (alternate/delayed feed variants). 1m runs (all 3 symbols): n=66-85, n<100 -> insufficient_data; WR/PF not used to decide the label (TSLA 1m numerically WR=36.36%/PF=2.23, which would pass wr>=35&pf>=1.6, but the n-gate is not met so it stays insufficient_data and is excluded from the majority vote, per Codex adversarial review). 5m runs (all 3 symbols, n=379-402, sufficient): AAPL WR=21.37%/PF=0.870, NVDA WR=23.63%/PF=0.886, TSLA WR=24.80%/PF=1.136 -- all fail every WR/PF threshold combination despite TSLA 5m having positive net profit (+0.65%, low-WR/high-payoff skew, not a qualifying edge per Codex review). 3/3 n-sufficient registry symbols fail on 5m -> majority fail -> stocks_us rejected. Market verdict is effectively decided by the 5m timeframe only; the 1m timeframe remains unresolved (insufficient_data), not itself rejected. bt_winrate/bt_pf are the median of the three sufficient 5m runs. NASDAQ:QQQ was run as an informational supplementary symbol (source research family_orderflow.md cites SPY/QQQ-class indices) but is not part of the registry stocks_us symbol set and was excluded from the majority vote; its results (1m insufficient_data n=85, 5m fail WR=24.05%/PF=0.931) are directionally consistent with the registry set. No parameter retuning attempted. Codex adversarial review (gpt-5.6-sol) confirmed all insufficient_data/fail labels are internally consistent with the stated criteria and found no outlier/equity distortion in the TSLA 5m result; it flagged that AAPL/NVDA/TSLA are correlated large-cap growth names so the 3-symbol majority is a governance rule, not a claim of independent statistical replication, and recommended the n>=100 gate be read per symbol-and-timeframe run rather than summed across timeframes (already how it was applied here)."
         },
         "stocks_jp": {
           "status": "candidate",
@@ -602,14 +613,20 @@
           "notes": "Untested extrapolation from QQQ evidence."
         },
         "stocks_us": {
-          "status": "candidate",
+          "status": "rejected",
           "timeframes": [
             "5"
           ],
-          "evidence": [],
-          "bt_winrate": null,
-          "bt_pf": null,
-          "notes": "Grade B: single 2024-2025 QQQ study recurring across 5 research passes. Morning window (0945-1130) strongest. See docs/research/scalping-20260717/family_vwap.md."
+          "evidence": [
+            "journal/backtests/vwap_rsi_pullback__BATS_AAPL__5__20260718.json",
+            "journal/backtests/vwap_rsi_pullback__BATS_NVDA__5__20260718.json",
+            "journal/backtests/vwap_rsi_pullback__BATS_TSLA__5__20260718.json",
+            "journal/backtests/vwap_rsi_pullback__BATS_QQQ__5__20260718.json"
+          ],
+          "bt_winrate": 0.42735,
+          "bt_pf": 0.891340,
+          "updated": "2026-07-18",
+          "notes": "RTH preset, default 10% equity sizing, ~1y of 5m data (2025-07-07..2026-07-17). Requested NASDAQ:AAPL/NVDA/TSLA all resolved to BATS:* feed variants (recorded in evidence JSONs), so this is a rejection on BATS-feed data. All 3 registry symbols sufficient (n=234/190/184) and all 3 FAIL: AAPL WR=42.74%/PF=0.891, NVDA WR=46.32%/PF=0.842, TSLA WR=42.39%/PF=0.980 -- NVDA clears the 45% WR branch but PF is far below 1.3, and no symbol reaches PF 1.6 for the 35% branch. maxDD 0.72-1.17%, well under the 15% cap. 3/3 fail -> majority fail -> rejected. bt_winrate/bt_pf are medians of the 3 sufficient registry runs. IMPORTANT QQQ-vs-source note: NASDAQ:QQQ (resolved BATS:QQQ) was run as an informational supplementary symbol because the setup's entire research evidence base is a single 2024-2025 QQQ study claiming strong morning-window (0945-1130) performance; the strategy default entry window resolves exactly to 0945-1130, so this was a same-window test. Result: n=212, WR=49.53%, PF=0.998, essentially breakeven (net -$31 on $1M) -- a failure to replicate the source's claimed PF 1.5+ edge; since the test period (2025-07 onward) postdates the source study window, this reads as an out-of-sample decay/overfit signal against the source study itself, materially weakening the Grade B evidence for every other market too. QQQ is excluded from the 3-symbol majority vote. Codex adversarial review (gpt-5.6-sol) confirmed all verdict arithmetic; flagged that (a) 3/3 fail is a governance vote over correlated large-cap tech names, not 3 independent replications, (b) declared strategy costs are commission_type=percent commission_value=0.005 = 0.005% (0.5bp) + slippage 2 ticks -- very low friction, which makes the breakeven QQQ result a stronger negative, (c) shorts are consistently the weaker side on all 4 symbols (long-only PFs 1.05/0.88/1.21/1.01 still all below 1.3, so no post-hoc long-only rescue), (d) TSLA canonical n=184 (winning+losing) vs API top-line 185 is immaterial to the n>=100 gate. No parameter retuning attempted. Prior Grade B research note preserved: single 2024-2025 QQQ study recurring across 5 research passes, morning window strongest, see docs/research/scalping-20260717/family_vwap.md."
         },
         "stocks_jp": {
           "status": "candidate",
@@ -625,6 +642,70 @@
         "sl": "1.5atr_beyond_vwap",
         "tp1": "prior_day_hl_or_2atr",
         "tp2": "2x_tp1_or_1500_flat"
+      },
+      "session_presets": {
+        "fx": "London/NY",
+        "futures": "RTH",
+        "stocks_us": "RTH",
+        "stocks_jp": "Tokyo"
+      }
+    },
+    {
+      "id": "intraday_momo_pure",
+      "name": "Session Momentum to Close (Pure)",
+      "pine_indicator": "pine/setups/intraday_momo_pure/intraday_momo_pure_indicator.pine",
+      "pine_strategy": "pine/setups/intraday_momo_pure/intraday_momo_pure_strategy.pine",
+      "tv_script_name": "DT Intraday Momentum Pure v1",
+      "status": "candidate",
+      "markets": {
+        "fx": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Ablation variant of intraday_momo (rejected here): no SL/TP overlay, EOD-only exit per the source studies. Compare against intraday_momo evidence to isolate the overlay's impact."
+        },
+        "futures": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "Primary ablation target: intraday_momo/futures was rejected with the overlay; this variant tests whether removing it recovers the published edge. Fixed 1 contract sizing default (zero-trade trap documented 2026-07-17)."
+        },
+        "stocks_us": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null,
+          "notes": "SPY variant has a documented negative independent replication; low priority."
+        },
+        "stocks_jp": {
+          "status": "candidate",
+          "timeframes": [
+            "5",
+            "15"
+          ],
+          "evidence": [],
+          "bt_winrate": null,
+          "bt_pf": null
+        }
+      },
+      "risk_model": {
+        "sl": "none_or_optional_disaster_stop",
+        "tp1": "none",
+        "tp2": "session_close"
       },
       "session_presets": {
         "fx": "London/NY",

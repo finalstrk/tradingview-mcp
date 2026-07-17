@@ -1,0 +1,82 @@
+{
+  "id": "intraday_momo_pure",
+  "market": "futures_index (ES-class) / SPY-class liquid ETF / liquid FX majors (ablation-test scope matches the instruments that rejected intraday_momo)",
+  "timeframe": "5m/15m intraday bars, one decision per RTH session",
+  "data_source": "TradingView OHLCV via the DT Intraday Momentum Pure v1 Pine indicator/strategy pair, cross-checked against the source academic papers (Gao-Han-Li-Zhou JFE 1993-2013; Baltussen et al. 1974-2020 global futures extension) for the unadapted signal logic; the exit model (no stop, hold to session close) is a direct replication of the source studies' tested behavior, not an untested overlay. The optional disaster stop, when enabled, is untested by any source and defaults off.",
+  "entry": [
+    "Compute open30Return = close(session_open + 30min) / session_open_price - 1.",
+    "At the decision bar T (default 30 minutes before session close, e.g. 15:30 ET for a 16:00 ET close), compute daySoFarReturn = close(T) / session_open_price - 1.",
+    "If open30Return and daySoFarReturn are both non-zero and share the same sign, enter long when the sign is positive and short when the sign is negative, at the close of the decision bar T.",
+    "No entry if either return is exactly zero or the signs disagree.",
+    "Exactly one entry per session per instrument; no re-entry after the decision bar even if conditions would otherwise qualify.",
+    "Identical entry logic to intraday_momo -- this spec exists to run a single-variable ablation test on the exit model only, per intraday_momo_spec.json's diagnostic_test requirement."
+  ],
+  "exit_take_profit": [
+    "None. No partial-exit order and no take-profit limit order exist in this variant. The full position is held to a hard time exit at session close, replicating the source studies' tested 'let it run to close' behavior exactly (this is the entire hypothesis being tested: that intraday_momo's TP1 50%-off overlay was cutting this tail).",
+    "The indicator label's tp1=/tp2= fields are numeric informational-only ATR-multiple projections (1.0x / 2.0x ATR(14) from entry) for chart reference; they are never real order prices."
+  ],
+  "exit_stop_loss": [
+    "None by default. Matches the source studies exactly (no native stop-loss in either source paper).",
+    "Optional catastrophic-only 'disaster stop' input (ATR multiple, default 0 = off). When enabled (>0), a single full-position stop order is placed at that ATR distance from entry -- this is a tail-risk backstop only, not a replication of intraday_momo's removed 1.5x ATR SL, and must be sized wide enough that it is not expected to fire under the tested run-to-close behavior. Any local backtest run with the disaster stop enabled must be recorded as a separate variant from the pure (disaster-stop-off) run in journal/backtests/, per the negative_result_log requirement below."
+  ],
+  "position_size": "Configurable at runtime: 'Fixed quantity' (default, 1 contract/share) or 'Percent of equity' (10% default), selected via a strategy input and passed through qty= on every strategy.entry() call. Default changed from intraday_momo's static percent_of_equity because intraday_momo's futures backtests hit a silent zero-trade sizing trap (10% of $1,000,000 is smaller than one ES/NQ/YM contract's notional) that required a manual fixed_1_contract override to produce real trade counts.",
+  "risk": {
+    "max_risk_per_trade": "Unbounded per trade unless the disaster stop is enabled -- this is an intentional deviation from intraday_momo's bounded 1.5x ATR risk-per-trade and is the direct consequence of testing the source studies' actual no-stop design. If the disaster stop is enabled for a given backtest/paper run, risk per trade is capped at the disaster-stop ATR distance times position size; this must be recorded explicitly per run since it changes the tested behavior.",
+    "daily_loss_limit": "1.0% equity as a portfolio-level circuit breaker across concurrently-run instrument instances (moot for a single instrument at 1 signal/day, same rationale as intraday_momo_spec.json)",
+    "max_concurrent_positions": 3,
+    "kill_switch": [
+      "Live/paper P&L diverges materially from the pure (no-overlay) backtest for 10 consecutive sessions",
+      "A single session's unrealized drawdown on an open pure (disaster-stop-off) position exceeds 5x the intraday_momo overlay's SL distance (1.5x ATR) -- flags that the no-stop design is producing outsized single-trade losses beyond what the ablation test intended to observe",
+      "TradingView CDP/data feed failure preventing decision-bar or EOD-exit detection",
+      "Manual override required before any live-sizing promotion beyond paper trading"
+    ]
+  },
+  "backtest_period": "2020-01-01..2026-06-30",
+  "benchmark": [
+    "intraday_momo (the overlaid sibling setup) over the identical instruments/timeframes/dates -- this is the primary comparison, since the entire purpose of this spec is a single-variable ablation test",
+    "Buy-and-hold ES continuous futures (or SPY) over the same dates",
+    "Cash at 0% annual return"
+  ],
+  "validation": {
+    "candidate_count": 1,
+    "negative_result_log": "Preserve the parameters and metrics for each failed, negative, rejected, or underperforming variant tested locally (e.g. disaster stop on vs. off, alternate disaster-stop ATR multiples, alternate decision-time offsets, fixed-quantity vs. percent-of-equity sizing, SPY-ETF vs. index-futures instrument choice) in journal/backtests/ per variant/instrument/timeframe run, not only in aggregate. Every run must record whether the disaster stop was enabled and at what ATR multiple.",
+    "diagnostic_test": "This spec records the counter-thesis for intraday_momo's failure cause: the SL/TP1 overlay is cutting the run-to-close tail that produces the edge. To test it, run one single-variable ablation test: remove the SL/TP1 overlay (this setup, disaster stop off) and compare only-EOD-exit performance against the prior intraday_momo backtest evidence on the same instruments and timeframes (ES/NQ/YM futures and EURUSD/GBPUSD/USDJPY/AUDUSD FX at 15m minimum). Record the observed, actual difference in PF/WR/trade-count/max-DD as the primary comparison metric. If PF/WR do not materially improve, the counter-thesis is falsified and the underlying signal, not the overlay, should be treated as the likely cause of the earlier negative verdict.",
+    "point_in_time_data": "Single-instrument system: n/a for universe membership. OHLCV bars are available at the decision time T, matching process_orders_on_close=true.",
+    "in_sample_period": "2020-01-01..2022-12-31",
+    "out_of_sample_period": "2023-01-01..2024-12-31",
+    "holdout_period": "2025-01-01..2026-06-30",
+    "parameter_freeze": "Freeze the disaster-stop ATR multiple (or confirm it stays disabled), the opening-window length, and the decision-time offset before opening the 2025-01-01..2026-06-30 holdout window; no holdout-driven retuning of any parameter after the freeze."
+  },
+  "execution": {
+    "primary_fill_model": "Fill at the close of the decision bar T (process_orders_on_close=true, matching the DT ORB v1 / intraday_momo reference convention); EOD exit fills at the close of the last in-session bar.",
+    "stress_fill_model": "Conservative one-bar-delayed fill at the following bar open, to approximate slippage beyond the decision-bar close.",
+    "commission": "0.005% per side primary (matching the intraday_momo reference strategy header) and 0.02% per side stress.",
+    "spread": "1 tick primary (ES-class index futures) or 1 cent (SPY-class ETF) or the pair's typical spread (FX) and 3 ticks / 3 cents / 3x spread adverse stress.",
+    "slippage": "2 ticks primary (matching the strategy header's slippage=2) and 5 ticks adverse stress.",
+    "leverage_funding": "1x gross leverage for the ETF variant; standard index-futures margin (no additional leverage beyond exchange initial margin) for the futures variant; standard retail FX margin for the FX variant. Funding 0 bps for the cash-ETF variant; futures/FX funding (roll/basis, swap) is not separately modeled."
+  },
+  "robustness": {
+    "top_trade_removal": "Recompute annualized return and Sharpe after removing the single largest winning trade, and again after removing the top 5% of winning trades, per instrument. Given this variant removes the TP1 partial exit, expect higher single-trade PnL concentration than intraday_momo -- report the comparison explicitly.",
+    "regime_splits": [
+      "trend/range (ADX-based classification of the RTH session)",
+      "high/low volatility (VIX or realized-vol tercile split)",
+      "COVID-crash subperiod vs. non-crash subperiod (the source paper's OOS retest found the edge concentrated in the COVID period, Sharpe 1.452 vs. -0.628 overall)"
+    ],
+    "long_short_decomposition": "Report long and short trade counts, win rates, and average R separately for both the futures and ETF/FX variants; this setup is not long-only so both sides must be reported.",
+    "concentration_check": "Report the top 1, top 3, and top 5 winning-day PnL contribution as a percentage of total strategy PnL, with a concentration cap of 40% for the top 5 winning days fixed before the holdout period. With the TP1 partial exit removed, concentration is expected to be higher than intraday_momo's equivalent figure; this must be disclosed and compared directly, not treated as an anomaly."
+  },
+  "paper_trade_period": "2026-07-17..2026-10-17",
+  "review_cadence": "weekly paper review; monthly parameter review",
+  "edge_death_condition": [
+    "PF < 1.0 on the 2025-01-01..2026-06-30 holdout",
+    "The core diagnostic test fails: removing the SL/TP1 overlay does not materially improve PF/WR versus the recorded intraday_momo rejection evidence on the same instruments/timeframes",
+    "Live/paper P&L diverges from the pure (no-overlay) backtest for 10 consecutive sessions",
+    "Realized OOS Sharpe falls below -1.0 for any tested instrument, echoing the documented 2010-2018 SPY negative replication (Sharpe -2.70)",
+    "Regime mismatch: edge only present during extreme-volatility periods (e.g. only positive during a COVID-like crash subperiod) rather than persisting across the full holdout",
+    "A single-trade loss (unbounded when the disaster stop is off) exceeds the kill_switch threshold above, indicating the no-stop design is not viable for the sizing/instrument in use"
+  ],
+  "human_confirmation": {
+    "required": true,
+    "live_orders": "manual only; this spec checker never places orders. This setup is a research candidate and must not be marked 'adopted' in journal/registry.json until both the diagnostic ablation test and the holdout period above are completed and independently reviewed."
+  }
+}

@@ -1,0 +1,216 @@
+//@version=6
+indicator("DT Intraday Momentum Pure v1", overlay=true, max_labels_count=50)
+
+// This is the "pure" sibling of DT Intraday Momentum v1. Same entry signal,
+// same hardened session/timing idioms (all inherited verbatim from
+// intraday_momo_indicator.pine, which survived 3 Codex review rounds). The
+// ONLY change is the exit model: intraday_momo bolts a DT-contract SL (1.5x
+// ATR) + TP1 (50% at 1.0x ATR) overlay onto the source studies' logic; that
+// overlay was never evaluated by any source and the overlaid version was
+// just rejected on futures and FX (15m, n>=145, PF 0.19-0.65). This variant
+// removes the overlay entirely and replicates the source studies' actual
+// tested exit: no stop-loss, hold the full position to a hard session-close
+// time exit. See README.md for the full hypothesis and evidence caveats,
+// and for the design-review rationale behind the label encoding below.
+
+// Inputs
+groupSession = "Session"
+sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+openWindow = input.session("0930-1000", "Opening return window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the opening window is auto-derived as [session open, session open + 30min]. Only the window END time is consumed: the first-30-minute return locks on the confirmed close of the bar whose close time reaches it.", group=groupSession)
+decisionWindow = input.session("1530-1600", "Decision window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the decision time is auto-derived as session close - 30min. Only the window START time is consumed: the decision fires on the confirmed close of the bar whose close time reaches it.", group=groupSession)
+
+groupRisk = "Risk"
+disasterStopAtrMult = input.float(0.0, "Disaster stop (ATR mult, 0 = off)", minval=0.0, step=0.5, group=groupRisk, tooltip="OFF by default, matching the source studies' no-stop, run-to-close design (this is what is being tested). When set > 0, this is a catastrophic-only tail-risk backstop, NOT a replication of the removed DT-contract SL: it should be sized far wider than a normal stop so it essentially never fires under the tested behavior, only under a genuine disaster move. Any run with this enabled must be recorded as a separate variant from the pure (off) baseline.")
+
+// Session preset resolution (mirrors DT ORB v1 / DT Intraday Momentum v1 convention)
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+// Fail-closed timeframe guard: identical rationale to intraday_momo_indicator.pine.
+// Explicit allowlist (not a "<=15" range check) so odd intraday resolutions that
+// happen to be <=15 (e.g. 2m, 3m, 10m) do not silently pass through unvalidated.
+timeframeOk = timeframe.isintraday and (timeframe.period == "1" or timeframe.period == "5" or timeframe.period == "15")
+
+// Derive the opening-window end and decision time from the resolved session
+// string for preset sessions (Tokyo/London/NY/RTH): opening window end =
+// session open + 30min, decision time = session close - 30min. Custom preset
+// keeps explicit user-supplied windows (end of openWindow / start of
+// decisionWindow), validated by the same coherence check. Identical to
+// intraday_momo_indicator.pine.
+f_hhmmToMin(_hhmm) =>
+    int(str.tonumber(str.substring(_hhmm, 0, 2))) * 60 + int(str.tonumber(str.substring(_hhmm, 2, 4)))
+
+f_sessionBounds(_s) =>
+    parts = str.split(_s, "-")
+    startRaw = array.size(parts) > 0 ? array.get(parts, 0) : ""
+    endRaw = array.size(parts) > 1 ? array.get(parts, 1) : ""
+    startParts = str.split(startRaw, ":")
+    endParts = str.split(endRaw, ":")
+    startClean = array.size(startParts) > 0 ? array.get(startParts, 0) : startRaw
+    endClean = array.size(endParts) > 0 ? array.get(endParts, 0) : endRaw
+    [f_hhmmToMin(startClean), f_hhmmToMin(endClean)]
+
+[sessStartMin, sessEndMin] = f_sessionBounds(sessStr)
+[owStartMin, owEndMin] = f_sessionBounds(openWindow)
+[dwStartMin, dwEndMin] = f_sessionBounds(decisionWindow)
+
+isCustomPreset = sessionPreset == "Custom"
+openWindowEndMin = isCustomPreset ? owEndMin : sessStartMin + 30
+decisionTimeMin = isCustomPreset ? dwStartMin : sessEndMin - 30
+
+// Coherence check (applies to presets AND Custom); fails closed with a single
+// managed warning label. Overnight sessions (start > end) are rejected too —
+// minute-of-day comparison does not support midnight wraps (accepted
+// library-wide limitation, see PINE_CONVENTIONS.md).
+windowsOk = sessStartMin < sessEndMin and openWindowEndMin > sessStartMin and openWindowEndMin < sessEndMin and decisionTimeMin >= openWindowEndMin and decisionTimeMin < sessEndMin
+
+// configOk gates every stateful/signal-producing calculation below.
+configOk = timeframeOk and windowsOk
+
+inSession = configOk and not na(time(timeframe.period, sessStr, tzStr))
+isNewDay = timeframe.change("D")
+
+// Minute-of-day of this bar's close, in the session timezone.
+barCloseMin = hour(time_close, tzStr) * 60 + minute(time_close, tzStr)
+
+// Single managed warning label (not recreated every barstate.islast tick).
+var label configWarnLabel = na
+warnText = not timeframeOk ? "DT Intraday Momentum Pure v1: unsupported timeframe (1m/5m/15m only)" : not windowsOk ? "DT Intraday Momentum Pure v1: incoherent session windows for preset '" + sessionPreset + "' (need open+30min and close-30min inside the session, no midnight wrap)" : na
+if barstate.islast
+    if not na(warnText)
+        if na(configWarnLabel)
+            configWarnLabel := label.new(bar_index, high, warnText, style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
+        else
+            label.set_xy(configWarnLabel, bar_index, high)
+            label.set_text(configWarnLabel, warnText)
+    else if not na(configWarnLabel)
+        label.delete(configWarnLabel)
+        configWarnLabel := na
+
+// First in-session bar after either a session gap (inSession[1] false) or a
+// new-day reset (isNewDay true). Identical rationale to intraday_momo: on an
+// RTH-only feed the plain transition only fires once, on day 1.
+sessionOpenTrigger = inSession and (not inSession[1] or isNewDay)
+
+var float sessionOpenPrice = na
+var float open30Return = na
+var bool open30Locked = false
+var bool decisionResolved = false
+var bool tradedToday = false
+var string lastDir = "long"
+var float lastEntry = na
+var float lastStop = na
+var label sigLabel = na
+
+if isNewDay
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := na
+    sessionOpenPrice := na
+    open30Return := na
+    open30Locked := false
+    decisionResolved := false
+    tradedToday := false
+    lastDir := "long"
+    lastEntry := na
+    lastStop := na
+
+// Anchor session open price on the first in-session bar of the day. `open`
+// is fixed at bar formation and cannot repaint, so no isconfirmed gate needed.
+if sessionOpenTrigger
+    sessionOpenPrice := open
+
+// Lock the first-N-minute return on the confirmed close of the LAST bar
+// inside the opening window. Gated on barstate.isconfirmed so the lock
+// cannot fire off a still-forming realtime bar and repaint.
+openWindowLockEvent = inSession and not open30Locked and not na(sessionOpenPrice) and barstate.isconfirmed and barCloseMin >= openWindowEndMin
+if openWindowLockEvent
+    open30Return := close / sessionOpenPrice - 1.0
+    open30Locked := true
+
+atrValue = ta.atr(14)
+daySoFarReturn = na(sessionOpenPrice) ? na : close / sessionOpenPrice - 1.0
+
+sameSign = open30Locked and not na(open30Return) and not na(daySoFarReturn) and open30Return != 0.0 and daySoFarReturn != 0.0 and math.sign(open30Return) == math.sign(daySoFarReturn)
+
+disasterStopOn = disasterStopAtrMult > 0.0
+
+// The only price this setup ever protects with a real order is the optional
+// disaster stop; there is no take-profit order and no partial exit, so
+// there is nothing else to project a price for (see the label-encoding
+// rationale in README.md: an ATR-multiple "informational projection" for
+// tp1/tp2 was considered and rejected as more misleading than "none" to a
+// downstream parser expecting real order prices).
+f_disasterStop(_dir, _px) =>
+    _dir == "long" ? _px - atrValue * disasterStopAtrMult : _px + atrValue * disasterStopAtrMult
+
+// Decision bar T = the first confirmed in-session bar whose close time
+// reaches the decision time. Gated on barstate.isconfirmed: without this, an
+// intrabar close could flip the decision before the bar settles, then
+// repaint on the next tick. Once-per-day latch via decisionResolved.
+decisionEvent = inSession and not decisionResolved and barstate.isconfirmed and barCloseMin >= decisionTimeMin
+if decisionEvent
+    decisionResolved := true
+    if sameSign and not tradedToday
+        entryDir = open30Return > 0.0 ? "long" : "short"
+        lastDir := entryDir
+        lastEntry := close
+        lastStop := f_disasterStop(entryDir, close)
+        tradedToday := true
+
+// Label state and projection while forming (pre-decision, informational only)
+sigState = tradedToday ? "triggered" : decisionResolved ? "expired" : "forming"
+candidateDir = na(open30Return) ? "long" : open30Return >= 0.0 ? "long" : "short"
+candSl = f_disasterStop(candidateDir, close)
+labelDir = tradedToday ? lastDir : candidateDir
+labelEntry = tradedToday ? lastEntry : close
+labelStop = tradedToday ? lastStop : candSl
+
+// Honest sl=/tp1=/tp2= encoding (design-reviewed via Codex, see README.md):
+// this setup has no take-profit order and no partial-exit order at all, and
+// no stop-loss order unless the disaster stop is explicitly enabled. Rather
+// than fabricate numeric ATR-multiple "informational" prices for tp1/tp2
+// (which a downstream parser could easily mistake for real order levels,
+// especially since 0 is itself a valid price and cannot be used as a null
+// sentinel), all three fields report the literal token "none" whenever no
+// corresponding order exists. sl= is the one exception: when the disaster
+// stop is enabled (>0), sl= reports that real order's price, since it is a
+// real (if catastrophic-only) stop order — never the removed DT-contract SL.
+f_sigText(_dir, _state, _entry, _sl, _disasterOn) =>
+    "DT|intraday_momo_pure|" + _dir + "|" + _state + "|entry=" + str.tostring(_entry, format.mintick) + "|sl=" + (_disasterOn ? str.tostring(_sl, format.mintick) : "none") + "|tp1=" + "none" + "|tp2=" + "none"
+
+showLabel = inSession and not na(sessionOpenPrice) and not na(labelEntry) and not na(labelStop)
+labelColor = sigState == "triggered" ? color.new(color.green, 0) : sigState == "expired" ? color.new(color.gray, 0) : color.new(color.orange, 0)
+labelStyle = labelDir == "long" ? label.style_label_up : label.style_label_down
+
+if showLabel
+    if not na(sigLabel)
+        label.delete(sigLabel)
+    sigLabel := label.new(bar_index, labelEntry, f_sigText(labelDir, sigState, labelEntry, labelStop, disasterStopOn), style=labelStyle, color=labelColor, textcolor=color.white)
+
+// Signal events (decision bar only, one per day, mirrors the entry logic
+// above). decisionEvent already carries the barstate.isconfirmed gate.
+longSignalEvent = decisionEvent and sameSign and open30Return > 0.0 and not tradedToday[1]
+shortSignalEvent = decisionEvent and sameSign and open30Return < 0.0 and not tradedToday[1]
+
+// Visual markers
+plotshape(longSignalEvent, title="Momo Pure Long Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), text="MomoP L", size=size.tiny)
+plotshape(shortSignalEvent, title="Momo Pure Short Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="MomoP S", size=size.tiny)
+plot(na(sessionOpenPrice) ? na : sessionOpenPrice, title="Session Open", color=color.new(color.blue, 60), style=plot.style_circles)
+
+// Alerts
+alertcondition(longSignalEvent, "DT Intraday Momo Pure Long", "DT Intraday Momentum Pure v1 long signal")
+alertcondition(shortSignalEvent, "DT Intraday Momo Pure Short", "DT Intraday Momentum Pure v1 short signal")

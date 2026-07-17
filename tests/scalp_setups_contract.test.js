@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SETUP_IDS = ['torb', 'intraday_momo', 'noise_break', 'vwap_rsi_pullback'];
+const SETUP_IDS = ['torb', 'intraday_momo', 'intraday_momo_pure', 'noise_break', 'vwap_rsi_pullback'];
 
 const registry = JSON.parse(fs.readFileSync(path.join(ROOT, 'journal', 'registry.json'), 'utf8'));
 

@@ -1,0 +1,252 @@
+//@version=6
+strategy("DT Intraday Momentum Pure v1", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     commission_type=strategy.commission.percent, commission_value=0.005,
+     slippage=2, process_orders_on_close=true, calc_on_every_tick=false)
+
+// This is the "pure" sibling of DT Intraday Momentum v1. Same entry signal,
+// same hardened session/timing idioms (all inherited verbatim from
+// intraday_momo_strategy.pine, which survived 3 Codex review rounds). The
+// ONLY change is the exit model: intraday_momo bolts a DT-contract SL (1.5x
+// ATR) + TP1 (50% at 1.0x ATR) overlay onto the source studies' logic; that
+// overlay was never evaluated by any source and the overlaid version was
+// just rejected on futures and FX (15m, n>=145, PF 0.19-0.65). This variant
+// removes the overlay entirely and replicates the source studies' actual
+// tested exit: no stop-loss, hold the full position to a hard session-close
+// time exit (optionally backstopped by a disabled-by-default disaster
+// stop). See README.md for the full hypothesis, evidence caveats, and the
+// design-review rationale (via Codex, read-only) behind the choices below.
+//
+// The header's default_qty_type/default_qty_value (percent_of_equity, 10%)
+// is kept identical to intraday_momo's static declaration on purpose, so a
+// "Percent of equity" sizing-mode run stays comparable to intraday_momo's
+// existing FX evidence without reimplementing TradingView's own
+// point-value-aware percent sizing formula. "Fixed quantity" mode (the
+// default here) overrides this per-order via an explicit qty= argument.
+
+// Inputs
+groupSession = "Session"
+sessionPreset = input.string("RTH", "Session preset", options=["Tokyo", "London", "NY", "RTH", "Custom"], group=groupSession)
+customSession = input.session("0930-1600", "Custom session", group=groupSession)
+customTimezone = input.string("America/New_York", "Custom timezone", group=groupSession)
+openWindow = input.session("0930-1000", "Opening return window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the opening window is auto-derived as [session open, session open + 30min]. Only the window END time is consumed: the first-30-minute return locks on the confirmed close of the bar whose close time reaches it.", group=groupSession)
+decisionWindow = input.session("1530-1600", "Decision window override (Custom preset only)", tooltip="Used only when Session preset = Custom. For Tokyo/London/NY/RTH the decision time is auto-derived as session close - 30min. Only the window START time is consumed: the decision fires on the confirmed close of the bar whose close time reaches it.", group=groupSession)
+
+groupRisk = "Risk"
+disasterStopAtrMult = input.float(0.0, "Disaster stop (ATR mult, 0 = off)", minval=0.0, step=0.5, group=groupRisk, tooltip="OFF by default, matching the source studies' no-stop, run-to-close design (this is what is being tested). When set > 0, this places a single full-size stop order at that ATR distance as a catastrophic-only tail-risk backstop, NOT a replication of the removed DT-contract SL: it should be sized far wider than a normal stop so it essentially never fires under the tested behavior, only under a genuine disaster move. Any local backtest/paper run with this enabled must be recorded as a separate variant from the pure (off) baseline, since enabling it means the run is no longer testing the source studies' actual behavior.")
+
+groupSizing = "Sizing"
+sizingMode = input.string("Fixed quantity", "Position sizing", options=["Fixed quantity", "Percent of equity"], group=groupSizing, tooltip="Default 'Fixed quantity' avoids the zero-trade sizing trap seen in intraday_momo's futures backtests: percent_of_equity (10% of a $1,000,000 default account = $100k) is smaller than one ES/NQ/YM contract's notional, so every entry silently sized to 0 and produced 0 trades. Fixed quantity sizes every entry to a constant number of units regardless of price, matching how the rejected intraday_momo futures runs were actually re-run (fixed_1_contract override). 'Percent of equity' uses the strategy declaration's own default_qty_type/default_qty_value (10%) unchanged, so it stays directly comparable to intraday_momo's existing FX evidence -- use it only for instruments where per-unit notional is small relative to account size.")
+fixedQty = input.float(1.0, "Fixed quantity (contracts/shares, used when sizing = Fixed quantity)", minval=0.0000001, group=groupSizing)
+
+// Session preset resolution (mirrors DT ORB v1 / DT Intraday Momentum v1 convention)
+sessStr = switch sessionPreset
+    "Tokyo" => "0900-1500"
+    "London" => "0800-1630"
+    "NY" => "0930-1600"
+    "RTH" => "0930-1600"
+    => customSession
+
+tzStr = switch sessionPreset
+    "Tokyo" => "Asia/Tokyo"
+    "London" => "Europe/London"
+    "NY" => "America/New_York"
+    "RTH" => "America/New_York"
+    => customTimezone
+
+// Fail-closed timeframe guard: see intraday_momo_indicator.pine for rationale
+// (1m/5m/15m intraday charts only, explicit allowlist).
+timeframeOk = timeframe.isintraday and (timeframe.period == "1" or timeframe.period == "5" or timeframe.period == "15")
+
+// Derive the opening-window end and decision time from the resolved session
+// string for preset sessions (open+30min / close-30min); Custom preset keeps
+// explicit user-supplied windows. See intraday_momo_indicator.pine for the
+// full rationale.
+f_hhmmToMin(_hhmm) =>
+    int(str.tonumber(str.substring(_hhmm, 0, 2))) * 60 + int(str.tonumber(str.substring(_hhmm, 2, 4)))
+
+f_sessionBounds(_s) =>
+    parts = str.split(_s, "-")
+    startRaw = array.size(parts) > 0 ? array.get(parts, 0) : ""
+    endRaw = array.size(parts) > 1 ? array.get(parts, 1) : ""
+    startParts = str.split(startRaw, ":")
+    endParts = str.split(endRaw, ":")
+    startClean = array.size(startParts) > 0 ? array.get(startParts, 0) : startRaw
+    endClean = array.size(endParts) > 0 ? array.get(endParts, 0) : endRaw
+    [f_hhmmToMin(startClean), f_hhmmToMin(endClean)]
+
+[sessStartMin, sessEndMin] = f_sessionBounds(sessStr)
+[owStartMin, owEndMin] = f_sessionBounds(openWindow)
+[dwStartMin, dwEndMin] = f_sessionBounds(decisionWindow)
+
+isCustomPreset = sessionPreset == "Custom"
+openWindowEndMin = isCustomPreset ? owEndMin : sessStartMin + 30
+decisionTimeMin = isCustomPreset ? dwStartMin : sessEndMin - 30
+
+// Coherence check (presets AND Custom); fails closed with a warning label.
+// Overnight sessions (start > end) are rejected — minute-of-day comparison
+// does not support midnight wraps (accepted library-wide limitation). Also
+// guarantees decisionTimeMin < sessEndMin strictly, so the decision bar and
+// the final session bar can never be the same bar for a coherent config
+// (see the entry guard below, which is still defensive about this).
+windowsOk = sessStartMin < sessEndMin and openWindowEndMin > sessStartMin and openWindowEndMin < sessEndMin and decisionTimeMin >= openWindowEndMin and decisionTimeMin < sessEndMin
+
+// configOk gates every stateful/order-producing calculation below, so an
+// incoherent configuration fails closed (no entries) instead of trading off
+// a bad window.
+configOk = timeframeOk and windowsOk
+
+inSession = configOk and not na(time(timeframe.period, sessStr, tzStr))
+isNewDay = timeframe.change("D")
+
+// Minute-of-day of this bar's close, in the session timezone.
+barCloseMin = hour(time_close, tzStr) * 60 + minute(time_close, tzStr)
+
+// Single managed warning label, mirroring the indicator.
+var label configWarnLabel = na
+warnText = not timeframeOk ? "DT Intraday Momentum Pure v1: unsupported timeframe (1m/5m/15m only)" : not windowsOk ? "DT Intraday Momentum Pure v1: incoherent session windows for preset '" + sessionPreset + "' (need open+30min and close-30min inside the session, no midnight wrap)" : na
+if barstate.islast
+    if not na(warnText)
+        if na(configWarnLabel)
+            configWarnLabel := label.new(bar_index, high, warnText, style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
+        else
+            label.set_xy(configWarnLabel, bar_index, high)
+            label.set_text(configWarnLabel, warnText)
+    else if not na(configWarnLabel)
+        label.delete(configWarnLabel)
+        configWarnLabel := na
+
+// Safety flatten: if a position somehow survived into a new session (e.g. a
+// data gap suppressed the prior day's final session bar), do not let it sit
+// unmanaged or seed the new day's tradedToday state incorrectly. This runs
+// BEFORE the entry logic below (not just as an end-of-file backstop), and
+// the entry guard also independently requires strategy.position_size == 0,
+// so a still-open carryover position cannot mix with a new day's entry
+// signal even on the rare bar where both conditions would otherwise align.
+if isNewDay and strategy.position_size != 0
+    strategy.close_all("Carryover flatten")
+
+// First in-session bar after either a session gap (inSession[1] false) or a
+// new-day reset (isNewDay true). See intraday_momo_indicator.pine for the
+// RTH-only-feed rationale this fixes.
+sessionOpenTrigger = inSession and (not inSession[1] or isNewDay)
+
+var float sessionOpenPrice = na
+var float open30Return = na
+var bool open30Locked = false
+var bool decisionResolved = false
+var bool tradedToday = false
+var float activeStop = na
+var bool activeStopOn = false
+
+if isNewDay
+    sessionOpenPrice := na
+    open30Return := na
+    open30Locked := false
+    decisionResolved := false
+    tradedToday := false
+
+if sessionOpenTrigger
+    sessionOpenPrice := open
+
+// Lock the first-N-minute return on the confirmed close of the LAST bar
+// inside the opening window. Gated on barstate.isconfirmed so the lock
+// cannot fire off a still-forming realtime bar.
+openWindowLockEvent = inSession and not open30Locked and not na(sessionOpenPrice) and barstate.isconfirmed and barCloseMin >= openWindowEndMin
+if openWindowLockEvent
+    open30Return := close / sessionOpenPrice - 1.0
+    open30Locked := true
+
+atrValue = ta.atr(14)
+daySoFarReturn = na(sessionOpenPrice) ? na : close / sessionOpenPrice - 1.0
+sameSign = open30Locked and not na(open30Return) and not na(daySoFarReturn) and open30Return != 0.0 and daySoFarReturn != 0.0 and math.sign(open30Return) == math.sign(daySoFarReturn)
+
+disasterStopOn = disasterStopAtrMult > 0.0
+
+// Runtime order quantity. "Fixed quantity" overrides the header's default
+// sizing with a constant unit count (default 1), avoiding the zero-trade
+// sizing trap that affected intraday_momo's futures backtests under
+// percent_of_equity. "Percent of equity" passes qty=na, which falls back to
+// the strategy declaration's own default_qty_type/default_qty_value (10%)
+// -- i.e. TradingView's own point-value-aware sizing calculation, not a
+// reimplementation of it.
+f_qty() =>
+    sizingMode == "Fixed quantity" ? fixedQty : na
+
+// Hard EOD flat detection is computed here (before the entry logic) so the
+// entry guard below can defensively exclude the final session bar from ever
+// opening a new position. windowsOk already guarantees decisionTimeMin <
+// sessEndMin strictly, so under a coherent config the decision bar can never
+// literally be the final session bar -- this guard exists purely as
+// defense in depth against that invariant being violated by a future edit.
+isFinalSessionBar = inSession and barstate.isconfirmed and barCloseMin >= sessEndMin
+
+// Decision bar T = the first confirmed in-session bar whose close time
+// reaches the decision time. barstate.isconfirmed prevents sizing an order
+// off a still-forming intrabar close that later settles differently.
+decisionEvent = inSession and not decisionResolved and barstate.isconfirmed and barCloseMin >= decisionTimeMin
+longSignal = decisionEvent and sameSign and open30Return > 0.0 and not tradedToday and strategy.position_size == 0 and not isFinalSessionBar
+shortSignal = decisionEvent and sameSign and open30Return < 0.0 and not tradedToday and strategy.position_size == 0 and not isFinalSessionBar
+if decisionEvent
+    decisionResolved := true
+
+// Entries: no stop-loss and no take-profit order at entry, matching the
+// source studies' actual tested behavior (full position held to the hard
+// EOD time exit below -- this is the ONLY normal exit path). The only
+// optional protective order is the disaster stop (OFF by default), computed
+// and attached in the same signal block as the entry, so the entry bar
+// itself is protected immediately if the disaster stop is enabled, not left
+// unmanaged until the next bar's re-issue block runs.
+if longSignal
+    strategy.entry("Long", strategy.long, qty=f_qty())
+    activeStopOn := disasterStopOn
+    if disasterStopOn
+        activeStop := close - atrValue * disasterStopAtrMult
+        strategy.exit("L-Disaster", "Long", stop=activeStop)
+    else
+        activeStop := na
+    tradedToday := true
+
+if shortSignal
+    strategy.entry("Short", strategy.short, qty=f_qty())
+    activeStopOn := disasterStopOn
+    if disasterStopOn
+        activeStop := close + atrValue * disasterStopAtrMult
+        strategy.exit("S-Disaster", "Short", stop=activeStop)
+    else
+        activeStop := na
+    tradedToday := true
+
+// Re-issue the disaster stop on bars after the entry bar (same level) while
+// the position remains open, mirroring the intraday_momo re-issue pattern.
+// No re-issue happens at all when the disaster stop is disabled (default):
+// the position simply rides unprotected to the EOD time exit, which is the
+// entire point of this variant.
+if strategy.position_size > 0 and activeStopOn and not na(activeStop)
+    strategy.exit("L-Disaster", "Long", stop=activeStop)
+
+if strategy.position_size < 0 and activeStopOn and not na(activeStop)
+    strategy.exit("S-Disaster", "Short", stop=activeStop)
+
+// Hard EOD flat: exit on the final session bar itself — the first confirmed
+// in-session bar whose close time reaches the session end. With
+// process_orders_on_close=true the flatten fills at that bar's close, i.e.
+// the session-close price, replicating the source studies' tested "run to
+// close" exit exactly. Note process_orders_on_close means an entry placed
+// earlier THIS SAME bar has not yet updated strategy.position_size within
+// this script execution; that is precisely why entries are excluded from
+// the final session bar above via the isFinalSessionBar guard, rather than
+// relying on ordering strategy.close_all() after strategy.entry() on the
+// same bar (which would not see the not-yet-filled entry and could let a
+// same-bar entry carry through to the next session unmanaged). The
+// isNewDay carryover flatten above remains as a backstop for days whose
+// final session bar is missing from the feed entirely.
+if isFinalSessionBar and strategy.position_size != 0
+    strategy.close_all("EOD")
+    activeStop := na
+    activeStopOn := false
+
+// Visual markers
+plotshape(longSignal, title="Momo Pure Long Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), text="MomoP L", size=size.tiny)
+plotshape(shortSignal, title="Momo Pure Short Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="MomoP S", size=size.tiny)
+plot(na(sessionOpenPrice) ? na : sessionOpenPrice, title="Session Open", color=color.new(color.blue, 60), style=plot.style_circles)
